@@ -13,13 +13,13 @@ if [ "$1" == "debug" ]; then
     echo "Building in debug mode with DEBUG_MAIN macro defined"
 
     # Compile the generated lexer and parser
-    g++ -std=c++17 -c evaGrammar.c evaGrammar.yy.c  -DDEBUG_MAIN
+    clang++ -std=c++20 -c evaGrammar.c evaGrammar.yy.c evaParser.cpp -DDEBUG_MAIN
     
-    g++ -std=c++17 -o eva-llvm -std=c++17 -stdlib=libc++ evaGrammar.o evaGrammar.yy.o -ll -g
+    clang++ -std=c++20 -o eva-llvm -std=c++17 -stdlib=libc++ evaGrammar.o evaGrammar.yy.o evaParser.o -ll -g
 else
     echo "Building in regular mode without DEBUG_MAIN macro"
     # Compile the generated lexer and parser
-    g++ -std=c++17 -c evaGrammar.c evaGrammar.yy.c
+    clang++ -std=c++20 -c evaGrammar.c evaGrammar.yy.c evaParser.cpp
     
-    g++ -std=c++17 -o eva-llvm -I/opt/homebrew/Cellar/llvm/18.1.5/include -std=c++17 -stdlib=libc++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -L/opt/homebrew/Cellar/llvm/18.1.5/lib -Wl,-search_paths_first -Wl,-headerpad_max_install_names -lLLVM-18 evaGrammar.o evaGrammar.yy.o evaLLM.cpp -ll -g
+    clang++ -std=c++20 -o eva-llvm -I/opt/homebrew/Cellar/llvm/18.1.5/include -std=c++17 -stdlib=libc++ -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -L/opt/homebrew/Cellar/llvm/18.1.5/lib -Wl,-search_paths_first -Wl,-headerpad_max_install_names -lLLVM-18 evaGrammar.o evaGrammar.yy.o evaParser.o evaLLM.cpp -ll -g
 fi

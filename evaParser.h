@@ -2,37 +2,84 @@
 
 #include <iostream>
 #include <string>
+#include <variant>
 #include <vector>
 
-#include "evaExp.h"
-#include "evaGrammar.h"
-#include "evaLexer.h"
+struct EvaExpr {
+    enum class ExpType { Number, String, Symbol, List };
 
-extern int yyparse();
+    EvaExpr(const EvaExpr&) = delete;
+
+    EvaExpr& operator=(const EvaExpr&) = delete;
+
+    EvaExpr(int expNumber) : expType{ExpType::Number}, expNumber{expNumber} {
+    }
+
+    EvaExpr(const std::string expString) {
+        if (expString[0] == '"') {
+            this->expString = expString.substr(1, expString.size() - 2);
+            this->expType   = ExpType::String;
+        } else {
+            this->expString = std::move(expString);
+            this->expType   = ExpType::Symbol;
+        }
+    }
+
+    EvaExpr(std::vector<EvaExpr*>& expList) : expType{ExpType::List} {
+        for (auto& exp : expList) {
+            this->expList.push_back(std::unique_ptr<EvaExpr>(exp));
+        }
+    }
+
+    EvaExpr(std::vector<std::unique_ptr<EvaExpr>> expList)
+        : expType(ExpType::List), expList(std::move(expList)) {
+    }
+
+    std::string toString() const {
+        switch (expType) {
+            case ExpType::Number:
+                return std::move(std::to_string(expNumber));
+            case ExpType::String:
+                return expString;
+            case ExpType::Symbol:
+                return std::move(expString);
+            case ExpType::List: {
+                std::string str = "(";
+                for (auto& exp : expList) {
+                    str += exp->toString() + " ";
+                }
+                str += ")";
+                return std::move(str);
+            }
+        }
+    }
+
+    ExpType                               expType;
+    int                                   expNumber;
+    std::string                           expString;
+    std::vector<std::unique_ptr<EvaExpr>> expList;
+};
 
 //
 // EvaParser
 //
-extern std::vector<EvaExpr*>* rootNode;
-
 class EvaParser {
 public:
     EvaParser() = default;
 
     ~EvaParser() = default;
 
-    std::unique_ptr<std::vector<EvaExpr*>> parse(const char* program) {
-        YY_BUFFER_STATE buffer = yy_scan_string(program);
-        yy_switch_to_buffer(buffer);
+    std::unique_ptr<EvaExpr> parse(const char* program);
 
-        // Parse the input
-        if (yyparse() == 0) {
-            yy_delete_buffer(buffer);
-            auto exps = std::make_unique<std::vector<EvaExpr*>>(*rootNode);
-            return exps;
-        } else {
-            yy_delete_buffer(buffer);
-            return nullptr;
-        }
+    static EvaExpr* getRootNodePtr() {
+        return rootExpr.get();
     }
+
+    static void moveExpr(EvaExpr* expr) {
+        rootExpr->expList.push_back(std::unique_ptr<EvaExpr>(expr));
+    }
+
+private:
+    static inline std::unique_ptr<EvaExpr> rootExpr =
+        std::make_unique<EvaExpr>(std::vector<std::unique_ptr<EvaExpr>>{});
 };

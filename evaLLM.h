@@ -20,8 +20,8 @@ public:
         yydebug     = 1;
         auto parser = std::make_unique<EvaParser>();
         std::cout << "Parsing program: " << program << std::endl;
-        auto exps = parser->parse(program);
-        compile(std::move(exps));
+        auto expr = parser->parse(program);
+        compile(std::move(expr));
         saveModuleFromFile("eva.ll");
     }
 
@@ -32,48 +32,52 @@ private:
         builder = std::make_unique<llvm::IRBuilder<>>(*context);
     }
 
-    void compile(std::unique_ptr<std::vector<EvaExpr*>> exps) {
-        fn = createFunction("main", llvm::FunctionType::get(builder->getInt32Ty(), false));
-        std::for_each(exps->begin(), exps->end(), [&](EvaExpr* exp) {
-            gen(std::make_unique<EvaExpr>(*exp));
-        });
+    void compile(std::unique_ptr<EvaExpr> expr) {
+        fn          = createFunction("main", llvm::FunctionType::get(builder->getInt32Ty(), false));
+        auto result = gen(std::move(expr));
 
-        // auto result = builder->CreateIntCast(0, builder->getInt32Ty(), true);
-        auto result = builder->getInt32(0);
+        result = builder->CreateIntCast(result, builder->getInt32Ty(), true);
         builder->CreateRet(result);
         verifyFunction(*fn);
     }
 
-    llvm::Value* gen(std::unique_ptr<EvaExpr> exp) {
-        switch (exp->expType) {
+    llvm::Value* gen(std::unique_ptr<EvaExpr> expr) {
+        switch (expr->expType) {
             case EvaExpr::ExpType::Number:
-                return builder->getInt32(exp->expNumber);
+                return builder->getInt32(expr->expNumber);
             case EvaExpr::ExpType::String:
-                return builder->CreateGlobalStringPtr(exp->expString.c_str());
+                return builder->CreateGlobalStringPtr(expr->expString.c_str());
             case EvaExpr::ExpType::Symbol:
-                if (exp->expString == "VERSION") {
-                    auto var = module->getGlobalVariable(exp->expString);
+                if (expr->expString == "VERSION") {
+                    auto var = module->getGlobalVariable(expr->expString);
                     return var->getInitializer();
                 }
                 return builder->getInt32(0);
             case EvaExpr::ExpType::List: {
-                auto tag = exp->expList->front();
+                auto& tag = expr->expList.front();
                 if (tag->expType == EvaExpr::ExpType::Symbol) {
                     auto op = tag->expString;
                     if (op == "print") {
                         auto                      printFn = module->getFunction("printf");
                         std::vector<llvm::Value*> args{};
-                        for (auto i = 1; i < exp->expList->size(); i++) {
-                            auto arg = gen(std::make_unique<EvaExpr>(*exp->expList->at(i)));
+                        for (auto i = 1; i < expr->expList.size(); i++) {
+                            auto& subExpr = expr->expList.at(i);
+                            auto  arg     = gen(std::move(subExpr));
                             args.push_back(arg);
                         }
                         return builder->CreateCall(printFn, args);
                     } else if (op == "var") {
-                        auto name = exp->expList->at(1)->expString;
-                        auto init = gen(std::make_unique<EvaExpr>(*exp->expList->at(2)));
+                        auto& subExpr = expr->expList.at(2);
+                        auto  name    = expr->expList.at(1)->expString;
+                        auto  init    = gen(std::move(subExpr));
                         createGlobalVar(name, static_cast<llvm::Constant*>(init));
                         return init;
                     }
+                } else {
+                    for (auto& subExpr : expr->expList) {
+                        gen(std::move(subExpr));
+                    }
+                    return builder->getInt32(0);
                 }
                 return builder->getInt32(0);
             }
