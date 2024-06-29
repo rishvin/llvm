@@ -2,8 +2,8 @@
 #include <iostream>
 #include <string>
 
-#include "evaParser.h"
-#include "evaGrammar.h"
+#include <evaParser.h>
+#include <evaGrammar.h>
 
 #define YY_FLEX_DEBUG 1
 %}
@@ -11,8 +11,6 @@
 %option noyywrap
 %option reentrant
 %option bison-bridge
-%option outfile="evaLexer.c"
-%option header-file="evaLexer.h"
 
 
 %%

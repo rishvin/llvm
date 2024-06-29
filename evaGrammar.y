@@ -7,7 +7,7 @@
 %parse-param {void *scanner} {EvaParser *parser}
 
 %code requires {
-#include "evaParser.h"
+#include <evaParser.h>
 }
 
 %{
@@ -15,9 +15,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include "evaGrammar.h"
-#include "evaLexer.h"
-#include "evaParser.h"
+#include <evaGrammar.h>
+#include <evaLexer.h>
+#include <evaParser.h>
 
 void yyerror(void *locp, EvaParser* parser, const char *s);
 

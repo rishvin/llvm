@@ -2,7 +2,6 @@
 
 #include <iostream>
 #include <string>
-#include <variant>
 #include <vector>
 
 struct EvaExpr {
@@ -65,10 +64,6 @@ struct EvaExpr {
 //
 class EvaParser {
 public:
-    EvaParser() = default;
-
-    ~EvaParser() = default;
-
     std::unique_ptr<EvaExpr> parse(const char* program);
 
     EvaExpr* getRootNodePtr() {
