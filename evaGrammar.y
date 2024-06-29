@@ -1,18 +1,28 @@
+
+%define api.pure full
+%define parse.trace
+%define parse.error verbose
+
+%lex-param {void *scanner}
+%parse-param {void *scanner} {EvaParser *parser}
+
+%code requires {
+#include "evaParser.h"
+}
+
 %{
 
 #include <iostream>
 #include <string>
 #include <vector>
-
-#include "evaParser.h"
+#include "evaGrammar.h"
 #include "evaLexer.h"
+#include "evaParser.h"
 
-#define YYDEBUG 1
-#define YYERROR_VERBOSE 1
-
-void yyerror(const char *s); 
+void yyerror(void *locp, EvaParser* parser, const char *s);
 
 %}
+
 
 %union {
     EvaExpr* Expr;
@@ -33,8 +43,8 @@ void yyerror(const char *s);
 %%
 
 ROOT_EXPR
-    : EXPR { EvaParser::moveExpr($1); $$ = EvaParser::getRootNodePtr(); }
-    | ROOT_EXPR EXPR { EvaParser::moveExpr($2); $$ = EvaParser::getRootNodePtr(); }
+    : EXPR { parser->moveExpr($1); $$ = parser->getRootNodePtr(); }
+    | ROOT_EXPR EXPR { parser->moveExpr($2); $$ = parser->getRootNodePtr(); }
     ;
 
 EXPR
@@ -60,17 +70,6 @@ LIST_ENTRY_EXPR
 
 %%
 
-void yyerror(const char *s) {
+void yyerror(void *locp, EvaParser* parser, const char *s) {
     fprintf(stderr, "Error: %s\n", s);
 }
-
-#ifdef DEBUG_MAIN
-int main() {
-    yyparse();
-    if (rootNode != nullptr) {
-        rootNode->toString();
-        delete rootNode;
-    }
-    return 0;
-}
-#endif

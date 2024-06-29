@@ -71,15 +71,15 @@ public:
 
     std::unique_ptr<EvaExpr> parse(const char* program);
 
-    static EvaExpr* getRootNodePtr() {
+    EvaExpr* getRootNodePtr() {
         return rootExpr.get();
     }
 
-    static void moveExpr(EvaExpr* expr) {
+    void moveExpr(EvaExpr* expr) {
         rootExpr->expList.push_back(std::unique_ptr<EvaExpr>(expr));
     }
 
 private:
-    static inline std::unique_ptr<EvaExpr> rootExpr =
+    std::unique_ptr<EvaExpr> rootExpr =
         std::make_unique<EvaExpr>(std::vector<std::unique_ptr<EvaExpr>>{});
 };
