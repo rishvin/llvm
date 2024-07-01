@@ -29,6 +29,7 @@ add_executable(eva-llvm
         evaLLM.cpp
         ${CMAKE_BINARY_DIR}/evaGrammar.cpp
         ${CMAKE_BINARY_DIR}/evaLexer.cpp
+        evaEnvironment.h
 )
 target_compile_options(eva-llvm PRIVATE
         -D__STDC_CONSTANT_MACROS

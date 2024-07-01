@@ -16,6 +16,7 @@ EvaLLM::EvaLLM() {
     yydebug = 1;
 
     _setupExternalFunctions();
+    _setupGlobalEnviroment();
 }
 
 void EvaLLM::exec(const std::string& program, const std::string& outputFilename) const {
@@ -26,17 +27,17 @@ void EvaLLM::exec(const std::string& program, const std::string& outputFilename)
 }
 
 void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
-    const llvm::Function* mainFn =
-            _createFunction("main", llvm::FunctionType::get(_builder->getInt32Ty(), false));
+    const llvm::Function* mainFn = _createFunction(
+            "main", llvm::FunctionType::get(_builder->getInt32Ty(), false), _globalEnv);
 
-    auto result = _generate(expr);
+    auto result = _generate(expr, _globalEnv);
     result = _builder->CreateIntCast(result, _builder->getInt32Ty(), true);
     _builder->CreateRet(result);
 
     verifyFunction(*mainFn);
 }
 
-llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr) const {
+llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, GlobalEnv env) const {
     switch (expr->expType) {
         case EvaExpr::ExpType::Number:
             return _builder->getInt32(expr->expNumber);
@@ -44,13 +45,14 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr) const {
         case EvaExpr::ExpType::String:
             return _builder->CreateGlobalStringPtr(expr->expString);
 
-        case EvaExpr::ExpType::Symbol:
-            if (expr->expString == "VERSION") {
-                auto var = _module->getGlobalVariable(expr->expString);
-                return var->getInitializer();
+        case EvaExpr::ExpType::Symbol: {
+            const auto symbol = env->get(expr->expString);
+            if (const auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(symbol)) {
+                return _builder->CreateLoad(globalVar->getInitializer()->getType(), globalVar,
+                                            symbol->getName());
             }
             return _builder->getInt32(0);
-
+        }
         case EvaExpr::ExpType::List: {
             if (const auto& tag = expr->expList.front(); tag->expType == EvaExpr::ExpType::Symbol) {
                 const auto& op = tag->expString;
@@ -59,7 +61,7 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr) const {
                     std::vector<llvm::Value*> args{};
                     for (auto i = 1; i < expr->expList.size(); i++) {
                         auto& subExpr = expr->expList.at(i);
-                        auto arg = _generate(subExpr);
+                        auto arg = _generate(subExpr, env);
                         args.push_back(arg);
                     }
                     return _builder->CreateCall(printFn, args);
@@ -67,17 +69,27 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr) const {
                 if (op == "var") {
                     const auto& subExpr = expr->expList.at(2);
                     const auto& name = expr->expList.at(1)->expString;
-                    const auto& init = _generate(subExpr);
+                    const auto& init = _generate(subExpr, env);
 
                     _createGlobalVar(name, llvm::dyn_cast<llvm::Constant>(init));
                     return init;
                 }
 
+                if (op == "begin") {
+                    llvm::Value* result = nullptr;
+                    for (auto i = 1; i < expr->expList.size(); i++) {
+                        auto& subExpr = expr->expList.at(i);
+                        result = _generate(subExpr, env);
+                    }
+                    return result;
+                }
+
+
                 throw std::runtime_error("Unknown operator: " + op);
             }
 
             for (const auto& subExpr: expr->expList) {
-                std::ignore = _generate(subExpr);
+                std::ignore = _generate(subExpr, env);
             }
             return _builder->getInt32(0);
         }
@@ -94,19 +106,22 @@ llvm::Value* EvaLLM::_createGlobalVar(const std::string& name, llvm::Constant* i
     return variable;
 }
 
-llvm::Function* EvaLLM::_createFunction(const std::string& name, llvm::FunctionType* fnType) const {
+llvm::Function* EvaLLM::_createFunction(const std::string& name, llvm::FunctionType* fnType,
+                                        GlobalEnv env) const {
     auto fn = _module->getFunction(name);
     if (!fn) {
-        fn = _createFunctionProto(name, fnType);
+        fn = _createFunctionProto(name, fnType, env);
     }
 
     _createFunctionBlock(fn);
     return fn;
 }
 
-llvm::Function* EvaLLM::_createFunctionProto(const std::string& name,
-                                             llvm::FunctionType* fnType) const {
-    return llvm::Function::Create(fnType, llvm::Function::ExternalLinkage, name, *_module);
+llvm::Function* EvaLLM::_createFunctionProto(const std::string& name, llvm::FunctionType* fnType,
+                                             GlobalEnv env) const {
+    auto fn = llvm::Function::Create(fnType, llvm::Function::ExternalLinkage, name, *_module);
+    env->insert(name, fn);
+    return fn;
 }
 
 void EvaLLM::_createFunctionBlock(llvm::Function* fn) const {
@@ -124,6 +139,18 @@ void EvaLLM::_setupExternalFunctions() const {
                                               _builder->getInt8Ty()->getPointerTo(), true));
 }
 
+void EvaLLM::_setupGlobalEnviroment() const {
+    const std::unordered_map<std::string, llvm::Value*> globals{
+            {"VERSION", _builder->getInt32(1001)}};
+
+    std::unordered_map<std::string, llvm::Value*> globalVars{};
+    for (auto& [name, value]: globals) {
+        globalVars[name] = _createGlobalVar(name, llvm::dyn_cast<llvm::Constant>(value));
+    }
+    _globalEnv = std::make_shared<EvaEnvironment>(globalVars, nullptr);
+}
+
+
 void EvaLLM::_saveModule(const std::string& filename) const {
     std::error_code error;
     llvm::raw_fd_ostream file(filename, error);
@@ -133,8 +160,17 @@ void EvaLLM::_saveModule(const std::string& filename) const {
 int main(int argc, const char* argv[]) {
     const std::string program =
             R"(
-(var VERSION 50)
-(print "Value =%d" VERSION)
+(begin
+   (var VERSION 1001)
+
+   (begin
+      (var VERSION 2000)
+      (print "Value =%d" VERSION)
+   )
+
+   (print "Value =%d" VERSION)
+)
+
 )";
 
     EvaLLM vm{};
