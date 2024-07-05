@@ -8,6 +8,9 @@ public:
     EvaEnvironment(std::unordered_map<std::string, llvm::Value *> symbols,
                    std::shared_ptr<EvaEnvironment> parent) :
         _symbols{std::move(symbols)}, _parent{std::move(parent)} {}
+
+    explicit EvaEnvironment(std::shared_ptr<EvaEnvironment> parent) : _parent{std::move(parent)} {}
+
     void insert(const std::string &name, llvm::Value *value) { _symbols[name] = value; }
 
     llvm::Value *get(const std::string &name) const {

@@ -7,7 +7,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 
-using GlobalEnv = std::shared_ptr<EvaEnvironment>;
+using Env = std::shared_ptr<EvaEnvironment>;
 
 class EvaLLM {
 public:
@@ -18,19 +18,25 @@ public:
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
-    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, GlobalEnv env) const;
+    llvm::Type* toType(const std::string& type) const;
+    llvm::Value* handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn) const;
+
+    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn) const;
 
     llvm::Value* _createGlobalVar(const std::string& name, llvm::Constant* init) const;
 
     llvm::Function* _createFunction(const std::string& name, llvm::FunctionType* fnType,
-                                    GlobalEnv env) const;
+                                    Env env) const;
 
     llvm::Function* _createFunctionProto(const std::string& name, llvm::FunctionType* fnType,
-                                         GlobalEnv env) const;
+                                         Env env) const;
 
     void _createFunctionBlock(llvm::Function* fn) const;
 
     llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn) const;
+
+    llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
+                                  Env env) const;
 
     void _setupExternalFunctions() const;
 
@@ -41,5 +47,5 @@ private:
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;
     mutable std::unique_ptr<llvm::IRBuilder<>> _builder;
-    mutable GlobalEnv _globalEnv = nullptr;
+    mutable Env _globalEnv = nullptr;
 };
