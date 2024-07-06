@@ -149,10 +149,9 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         const auto& init = _generate(subExpr, env, fn);
 
         auto varBinding = allocateVariable(fn, name, type, env);
-        return _builder->CreateStore(init, varBinding);
+        _builder->CreateStore(init, varBinding);
 
-        //_createGlobalVar(name, llvm::dyn_cast<llvm::Constant>(init));
-        // return init;
+        return init;
     }
 
     if (op == "begin") {
@@ -180,21 +179,27 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         auto cond = _generate(expr->expList.at(1), env, fn);
         auto thenBB = _createBB("then", fn);
         auto elseBB = _createBB("else", fn);
-        auto ifEndBB = _createBB("ifEnd", fn);
+        auto ifEndBB = _createBB("ifEnd");
 
         _builder->CreateCondBr(cond, thenBB, elseBB);
         _builder->SetInsertPoint(thenBB);
         auto thenRes = _generate(expr->expList.at(2), env, fn);
         _builder->CreateBr(ifEndBB);
+        thenBB = _builder->GetInsertBlock();
 
         _builder->SetInsertPoint(elseBB);
         auto elseRes = _generate(expr->expList.at(3), env, fn);
         _builder->CreateBr(ifEndBB);
+        elseBB = _builder->GetInsertBlock();
 
+
+        fn->insert(--fn->end(), ifEndBB);
         _builder->SetInsertPoint(ifEndBB);
+
         auto phi = _builder->CreatePHI(_builder->getInt32Ty(), 2);
         phi->addIncoming(thenRes, thenBB);
         phi->addIncoming(elseRes, elseBB);
+
         return phi;
     }
 

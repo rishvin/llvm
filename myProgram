@@ -1,17 +1,30 @@
 (begin
     (var VERSION 1001)
     (begin
-        (var VERSION "chandan gopi")
-        (print "Value = %s" VERSION)
+        (var VERSION "1.0")
+        (print "Version = %s\n" VERSION)
     )
 
-    (var x 10)
+    (var x 20)
     (var y (+ x 50))
-    (print "Value = %d\n" y)
+    (print "Value of x = %d\n" x)
+    (print "Value of y = %d\n" y)
 
-    (if (== y 60)
-        (print "true cond: Value of y = %d\n" y)
-        (print "false cond: Value of x = %d\n" x)
+    (if (>= y 60)
+        (
+            (var xy (+ x y))
+            (if (>= xy 100)
+                (
+                    (print "Value of xy = %d\n" xy)
+                )
+                (
+                    (print "false cond: Value of xy = %d\n" xy)
+                )
+            )
+        )
+        (
+             (print "false cond: Value of y = %d\n" y)
+        )
     )
 
-    (print "Value = %d\n"(== VERSION 1001)))
+    (print "Version compare = %d\n"(== VERSION 1)))

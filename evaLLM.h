@@ -33,7 +33,7 @@ private:
 
     void _createFunctionBlock(llvm::Function* fn) const;
 
-    llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn) const;
+    llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn = nullptr) const;
 
     llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
                                   Env env) const;
