@@ -1,0 +1,17 @@
+(begin
+    (var VERSION 1001)
+    (begin
+        (var VERSION "chandan gopi")
+        (print "Value = %s" VERSION)
+    )
+
+    (var x 10)
+    (var y (+ x 50))
+    (print "Value = %d\n" y)
+
+    (if (== y 60)
+        (print "true cond: Value of y = %d\n" y)
+        (print "false cond: Value of x = %d\n" x)
+    )
+
+    (print "Value = %d\n"(== VERSION 1001)))
