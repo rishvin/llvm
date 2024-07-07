@@ -16,6 +16,21 @@ extern int yydebug;
     return _builder->OP(lhs, rhs, NAME);
 
 namespace {
+
+    auto extractName = [](const auto& subExpr) -> std::string {
+        if (subExpr->expType == EvaExpr::ExpType::List) {
+            return subExpr->expList.at(0)->expString;
+        }
+        return subExpr->expString;
+    };
+
+    auto extractType = [](const auto& subExpr) -> std::string {
+        if (subExpr->expType == EvaExpr::ExpType::List) {
+            return subExpr->expList.at(1)->expString;
+        }
+        return "number";
+    };
+
     std::string unRawString(const std::string& raw) {
         std::string output;
         output.reserve(raw.size());
@@ -128,20 +143,6 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         // var (x number) VARIABLE
         // var (x number) (+ y 10)
 
-        auto extractName = [](const auto& subExpr) -> std::string {
-            if (subExpr->expType == EvaExpr::ExpType::List) {
-                return subExpr->expList.at(0)->expString;
-            }
-            return subExpr->expString;
-        };
-
-        auto extractType = [](const auto& subExpr) -> std::string {
-            if (subExpr->expType == EvaExpr::ExpType::List) {
-                return subExpr->expList.at(1)->expString;
-            }
-            return "number";
-        };
-
         const auto& name = extractName(expr->expList.at(1));
         const auto& type = toType(extractType(expr->expList.at(1)));
 
@@ -203,6 +204,79 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         return phi;
     }
 
+    // while (cond) (body)
+    // (while (== x 10) (begin (print "x is 10") (set x 0)))
+    // cond
+
+    if (op == "while") {
+        auto condBB = _createBB("whileCond", fn);
+        auto loopBB = _createBB("whileLoop", fn);
+        auto endLoopBB = _createBB("whileLoopEnd", fn);
+
+        _builder->CreateBr(condBB);
+        _builder->SetInsertPoint(condBB);
+        auto cond = _generate(expr->expList.at(1), env, fn);
+        _builder->CreateCondBr(cond, loopBB, endLoopBB);
+
+        _builder->SetInsertPoint(loopBB);
+        auto whileRes = _generate(expr->expList.at(2), env, fn);
+        _builder->CreateBr(condBB);
+
+        _builder->SetInsertPoint(endLoopBB);
+        return _builder->getInt32(0);
+    }
+
+    if (op == "def") {
+        // (def add (x) (*x x))
+        // (def something ((x number) (y number)) -> number (+ x y))
+        auto fnName = expr->expList.at(1)->expString;
+        auto hasReturnType = expr->expList.size() > 4;
+
+        auto returnType =
+                hasReturnType ? toType(extractType(expr->expList.at(4))) : toType("number");
+
+        auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
+
+
+        // (def add (x) (* x x))
+        // (def add ((x number) (y number)) -> number (+ x y))
+        auto extractParams = [this](const auto& subExpr) {
+            std::vector<llvm::Type*> paramsType;
+            std::vector<std::string> paramsName;
+            if (subExpr->expType == EvaExpr::ExpType::List) {
+                for (auto i = 0; i < subExpr->expList.size(); i++) {
+                    paramsType.push_back(toType(extractType(subExpr->expList.at(i))));
+                    paramsName.push_back(extractName(subExpr->expList.at(i)));
+                }
+            } else {
+                paramsType.push_back(toType(extractType(subExpr)));
+                paramsName.push_back(extractName(subExpr));
+            }
+            return std::make_pair(std::move(paramsType), std::move(paramsName));
+        };
+
+
+        auto params = extractParams(expr->expList.at(2));
+
+        auto lastBB = _builder->GetInsertBlock();
+
+        auto currentFn = _createFunction(
+                fnName, llvm::FunctionType::get(returnType, params.first, false), env);
+
+        auto fnEnv = std::make_shared<EvaEnvironment>(env);
+
+        for (auto i = 0; i < params.second.size(); i++) {
+            auto arg = currentFn->getArg(i);
+            arg->setName(params.second[i]);
+            auto varBinding = allocateVariable(currentFn, params.second[i], params.first[i], fnEnv);
+            _builder->CreateStore(arg, varBinding);
+        }
+
+        auto retFn = _builder->CreateRet(_generate(body, fnEnv, currentFn));
+        _builder->SetInsertPoint(lastBB);
+        return retFn;
+    }
+
     if (op == "+") {
         BINARY_OP(CreateAdd, "add");
     }
@@ -234,8 +308,18 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         BINARY_OP(CreateICmpSGE, "ge");
     }
 
+    const auto& callable = _module->getFunction(op);
+    if (!callable) {
+        throw std::runtime_error("Unknown operator: " + op);
+    }
 
-    throw std::runtime_error("Unknown operator: " + op);
+    std::vector<llvm::Value*> args{};
+    for (auto i = 1; i < expr->expList.size(); i++) {
+        auto& subExpr = expr->expList.at(i);
+        auto arg = _generate(subExpr, env, fn);
+        args.push_back(arg);
+    }
+    return _builder->CreateCall(callable, args);
 }
 
 llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env,

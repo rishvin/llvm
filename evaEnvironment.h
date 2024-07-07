@@ -7,9 +7,9 @@ class EvaEnvironment : public std::enable_shared_from_this<EvaEnvironment> {
 public:
     EvaEnvironment(std::unordered_map<std::string, llvm::Value *> symbols,
                    std::shared_ptr<EvaEnvironment> parent) :
-        _symbols{std::move(symbols)}, _parent{std::move(parent)} {}
+        _symbols{std::move(symbols)}, _parent{parent} {}
 
-    explicit EvaEnvironment(std::shared_ptr<EvaEnvironment> parent) : _parent{std::move(parent)} {}
+    explicit EvaEnvironment(std::shared_ptr<EvaEnvironment> parent) : _parent{parent} {}
 
     void insert(const std::string &name, llvm::Value *value) { _symbols[name] = value; }
 

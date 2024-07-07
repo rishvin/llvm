@@ -27,4 +27,46 @@
         )
     )
 
-    (print "Version compare = %d\n"(== VERSION 1)))
+    (var times 5)
+    (while (> times 0)
+        (
+            (var nextTimes 5)
+            (while (> nextTimes 0)
+                (
+                    (print "Times = %d, Next Times = %d\n" times, nextTimes)
+                    (set nextTimes (- nextTimes 1))
+
+                    (if (>= y 10)
+                       (
+                           (var xy (+ x y))
+                           (if (>= xy 100)
+                               (
+                                   (print "Value of xy = %d\n" xy)
+                               )
+                               (
+                                   (print "false cond: Value of xy = %d\n" xy)
+                               )
+                           )
+                       )
+                       (
+                            (print "false cond: Value of y = %d\n" y)
+                       )
+                    )
+
+                )
+            )
+            (set times (- times 1))
+        )
+    )
+
+    (print "Version compare = %d\n"(== VERSION 1))
+
+
+    (def sum (a) (+ a 10))
+    (def multiply (a (b number)) -> number (* a b))
+    (var sumResult (sum x))
+    (var multiplyResult (multiply 10 20))
+    (print "Sum result = %d\n" sumResult)
+    (print "Multiply result = %d\n" multiplyResult)
+)
+
