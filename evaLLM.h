@@ -19,13 +19,15 @@ public:
         llvm::StructType* parent = nullptr;
         llvm::StructType* cls;
         std::string name;
-        std::unordered_map<std::string, llvm::Type*> fields;
+        std::unordered_map<std::string, std::pair<int, llvm::Type*>> fields;
         std::unordered_map<std::string, llvm::Function*> methods;
     };
 
     explicit EvaLLM();
 
     void exec(const std::string& program, const std::string& outputFilename) const;
+
+    void testSample() const;
 
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
@@ -59,6 +61,7 @@ private:
     void _saveModule(const std::string& filename) const;
 
     void _setupGlobalEnviroment() const;
+
 
     mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classes;
     mutable std::unique_ptr<llvm::LLVMContext> _context;

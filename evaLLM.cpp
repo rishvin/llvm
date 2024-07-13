@@ -128,6 +128,12 @@ llvm::Type* EvaLLM::toType(const std::string& type, llvm::StructType* cls) const
     if (type == "string") {
         return _builder->getInt8Ty()->getPointerTo();
     }
+
+    if (_classes.contains(type)) {
+        auto clsDef = _classes.at(type);
+        return clsDef->cls;
+    }
+
     return _builder->getInt32Ty();
 }
 
@@ -154,6 +160,9 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
         // var (x number) (+ y 10)
 
         const auto& name = extractName(expr->expList.at(1));
+
+        // This cls parameter is used to handle the self keyword when someone creates a variable
+        // inside the struct body.
         const auto& type = toType(extractType(expr->expList.at(1)), cls);
 
         const auto& subExpr = expr->expList.at(2);
@@ -308,11 +317,12 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
             throw std::runtime_error("Unknown class: " + clsName);
         }
 
-        // auto instance = _builder->CreateAlloca(clsDef->cls, nullptr, clsName);
-        auto clsSize = _module->getDataLayout().getTypeAllocSize(clsDef->cls);
-        auto malloc = _module->getFunction("GC_malloc");
-        auto instancePtr = _builder->CreateCall(malloc, _builder->getInt64(clsSize));
-        auto instance = _builder->CreatePointerCast(instancePtr, clsDef->cls->getPointerTo());
+        auto instanceName = "i" + clsName;
+        auto instance = _builder->CreateAlloca(clsDef->cls, nullptr, instanceName);
+        // auto clsSize = _module->getDataLayout().getTypeAllocSize(clsDef->cls);
+        // auto malloc = _module->getFunction("GC_malloc");
+        // auto instancePtr = _builder->CreateCall(malloc, _builder->getInt64(clsSize));
+        // auto instance = _builder->CreatePointerCast(instancePtr, clsDef->cls->getPointerTo());
 
         auto constructorName = clsDef->name + "_" + "__init__";
         const auto& constructor = _module->getFunction(constructorName);
@@ -327,6 +337,34 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
 
         _builder->CreateCall(constructor, args);
         return instance;
+    }
+
+    // prop point x
+    if (op == "prop") {
+        auto clsName = expr->expList.at(1)->expString;
+        auto instance = _generate(expr->expList.at(1), env, fn, cls);
+
+        auto cls = instance->getType(); // Struct actual type.
+
+        // The instance will of actual class type, but we need to get the pointer to the class type.
+        auto instancePtr = _builder->CreateAlloca(cls, nullptr, "ptr" + clsName);
+        _builder->CreateStore(instance, instancePtr);
+
+        auto clsDef = _classes.at(cls->getStructName().data());
+        if (!clsDef) {
+            throw std::runtime_error("Unknown class: " + clsName);
+        }
+        auto fieldName = expr->expList.at(2)->expString;
+        if (!clsDef->fields.contains(fieldName)) {
+            throw std::runtime_error("Unknown field: " + fieldName);
+        }
+
+        auto field = clsDef->fields.at(fieldName);
+        auto fieldIndex = field.first;
+
+        auto address = _builder->CreateStructGEP(cls, instancePtr, fieldIndex, "p" + fieldName);
+        // Use GetElementPtr to get the field.
+        return _builder->CreateLoad(field.second, address, "v" + fieldName);
     }
 
 
@@ -389,16 +427,18 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(
     auto classDef = _classes[name];
     auto& cls = classDef->cls;
 
+    int i = 0;
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
             auto varType = toType(extractType(subExpr->expList.at(1)), cls);
-            classDef->fields[varName] = varType;
+            classDef->fields[varName] = std::make_pair(i++, varType);
         }
     }
 
     std::vector<llvm::Type*> fieldsType;
-    for (const auto& [name, type]: classDef->fields) {
+    for (const auto& [name, indexType]: classDef->fields) {
+        auto& [_, type] = indexType;
         fieldsType.push_back(type);
     }
 
@@ -536,6 +576,61 @@ int main(int argc, const char* argv[]) {
     file.close();
 
     EvaLLM vm{};
+    vm.testSample();
     vm.exec(program.str(), "eva.ll");
     return 0;
+}
+
+void EvaLLM::testSample() const {
+    llvm::LLVMContext context;
+    llvm::Module module("struct_example", context);
+    llvm::IRBuilder<> builder(context);
+
+    // Define the structure type with two fields: an int and a float
+    std::vector<llvm::Type*> structFields;
+    structFields.push_back(builder.getInt32Ty()); // int field
+    structFields.push_back(builder.getFloatTy()); // float field
+
+    llvm::StructType* structType = llvm::StructType::create(context, structFields, "MyStruct");
+
+    // Create a function that allocates the struct and accesses its fields
+    llvm::FunctionType* funcType = llvm::FunctionType::get(builder.getVoidTy(), false);
+    llvm::Function* func =
+            llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "main", &module);
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", func);
+    builder.SetInsertPoint(entry);
+
+    // Allocate memory for the struct
+    llvm::Value* structAlloc = builder.CreateAlloca(structType, nullptr, "myStruct");
+
+    // Get the pointer to the first field
+    llvm::Value* firstFieldPtr =
+            builder.CreateStructGEP(structType, structAlloc, 0, "firstFieldPtr");
+    llvm::Value* secondFieldPtr =
+            builder.CreateStructGEP(structType, structAlloc, 1, "secondFieldPtr");
+
+    // Store values in the struct fields
+    builder.CreateStore(builder.getInt32(42), firstFieldPtr);
+    builder.CreateStore(llvm::ConstantFP::get(context, llvm::APFloat(3.14f)), secondFieldPtr);
+
+    // Load the values from the struct fields
+    llvm::Value* firstFieldVal =
+            builder.CreateLoad(builder.getInt32Ty(), firstFieldPtr, "firstFieldVal");
+    llvm::Value* secondFieldVal =
+            builder.CreateLoad(builder.getFloatTy(), secondFieldPtr, "secondFieldVal");
+
+    // Finish the function
+    builder.CreateRetVoid();
+
+    // Verify the module
+    llvm::verifyModule(module, &llvm::errs());
+
+    // Write the generated LLVM IR to a file
+    std::error_code errorCode;
+    llvm::raw_fd_ostream file("output.ll", errorCode);
+    if (errorCode) {
+        llvm::errs() << "Error opening file: " << errorCode.message() << "\n";
+    }
+
+    module.print(file, nullptr);
 }

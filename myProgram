@@ -78,6 +78,7 @@
             (def setY (self a) (0))
         )
     )
-    (var p (new Point (10, 20)))
+    (var (p Point) (new Point (10, 20)))
+    (print "Point x = %d\n" (prop p x))
 )
 
