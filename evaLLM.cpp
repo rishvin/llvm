@@ -10,9 +10,9 @@
 
 extern int yydebug;
 
-#define BINARY_OP(OP, NAME)                             \
-    auto lhs = _generate(expr->expList.at(1), env, fn); \
-    auto rhs = _generate(expr->expList.at(2), env, fn); \
+#define BINARY_OP(OP, NAME, CLS)                             \
+    auto lhs = _generate(expr->expList.at(1), env, fn, cls); \
+    auto rhs = _generate(expr->expList.at(2), env, fn, cls); \
     return _builder->OP(lhs, rhs, NAME);
 
 namespace {
@@ -26,9 +26,12 @@ namespace {
 
     auto extractType = [](const auto& subExpr) -> std::string {
         if (subExpr->expType == EvaExpr::ExpType::List) {
+            if (subExpr->expList.at(0)->expString == "self") {
+                return "self";
+            }
             return subExpr->expList.at(1)->expString;
         }
-        return "number";
+        return subExpr->expString == "self" ? "self" : "number";
     };
 
     std::string unRawString(const std::string& raw) {
@@ -104,14 +107,21 @@ void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
     llvm::Function* mainFn = _createFunction(
             "main", llvm::FunctionType::get(_builder->getInt32Ty(), false), _globalEnv);
 
-    auto result = _generate(expr, _globalEnv, mainFn);
+    auto result = _generate(expr, _globalEnv, mainFn, nullptr);
     result = _builder->CreateIntCast(result, _builder->getInt32Ty(), true);
     _builder->CreateRet(result);
 
     verifyFunction(*mainFn);
 }
 
-llvm::Type* EvaLLM::toType(const std::string& type) const {
+llvm::Type* EvaLLM::toType(const std::string& type, llvm::StructType* cls) const {
+    if (type == "self") {
+        if (!cls) {
+            throw std::runtime_error("self is not allowed here");
+        }
+        return cls->getPointerTo();
+    }
+
     if (type == "number") {
         return _builder->getInt32Ty();
     }
@@ -121,8 +131,8 @@ llvm::Type* EvaLLM::toType(const std::string& type) const {
     return _builder->getInt32Ty();
 }
 
-llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
-                               llvm::Function* fn) const {
+llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
+                               llvm::StructType* cls) const {
     auto op = expr->expList.front()->expString;
 
     if (op == "print") {
@@ -130,7 +140,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         std::vector<llvm::Value*> args{};
         for (auto i = 1; i < expr->expList.size(); i++) {
             auto& subExpr = expr->expList.at(i);
-            auto arg = _generate(subExpr, env, fn);
+            auto arg = _generate(subExpr, env, fn, cls);
             args.push_back(arg);
         }
         return _builder->CreateCall(printFn, args);
@@ -144,10 +154,10 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         // var (x number) (+ y 10)
 
         const auto& name = extractName(expr->expList.at(1));
-        const auto& type = toType(extractType(expr->expList.at(1)));
+        const auto& type = toType(extractType(expr->expList.at(1)), cls);
 
         const auto& subExpr = expr->expList.at(2);
-        const auto& init = _generate(subExpr, env, fn);
+        const auto& init = _generate(subExpr, env, fn, cls);
 
         auto varBinding = allocateVariable(fn, name, type, env);
         _builder->CreateStore(init, varBinding);
@@ -160,7 +170,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         llvm::Value* result = nullptr;
         for (auto i = 1; i < expr->expList.size(); i++) {
             auto& subExpr = expr->expList.at(i);
-            result = _generate(subExpr, currentEnv, fn);
+            result = _generate(subExpr, currentEnv, fn, cls);
         }
         return result;
     }
@@ -169,7 +179,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
         // set x 10
         auto name = expr->expList.at(1)->expString;
         auto valBinding = env->get(name);
-        auto newValue = _generate(expr->expList.at(2), env, fn);
+        auto newValue = _generate(expr->expList.at(2), env, fn, cls);
         _builder->CreateStore(newValue, valBinding);
         return newValue;
     }
@@ -177,19 +187,19 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
     // (if (== x 10) (print "x is 10") (print "x is not 10"))
     if (op == "if") {
         // if (cond) (then) (else)
-        auto cond = _generate(expr->expList.at(1), env, fn);
+        auto cond = _generate(expr->expList.at(1), env, fn, cls);
         auto thenBB = _createBB("then", fn);
         auto elseBB = _createBB("else", fn);
         auto ifEndBB = _createBB("ifEnd");
 
         _builder->CreateCondBr(cond, thenBB, elseBB);
         _builder->SetInsertPoint(thenBB);
-        auto thenRes = _generate(expr->expList.at(2), env, fn);
+        auto thenRes = _generate(expr->expList.at(2), env, fn, cls);
         _builder->CreateBr(ifEndBB);
         thenBB = _builder->GetInsertBlock();
 
         _builder->SetInsertPoint(elseBB);
-        auto elseRes = _generate(expr->expList.at(3), env, fn);
+        auto elseRes = _generate(expr->expList.at(3), env, fn, cls);
         _builder->CreateBr(ifEndBB);
         elseBB = _builder->GetInsertBlock();
 
@@ -215,11 +225,11 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
 
         _builder->CreateBr(condBB);
         _builder->SetInsertPoint(condBB);
-        auto cond = _generate(expr->expList.at(1), env, fn);
+        auto cond = _generate(expr->expList.at(1), env, fn, cls);
         _builder->CreateCondBr(cond, loopBB, endLoopBB);
 
         _builder->SetInsertPoint(loopBB);
-        auto whileRes = _generate(expr->expList.at(2), env, fn);
+        auto whileRes = _generate(expr->expList.at(2), env, fn, nullptr);
         _builder->CreateBr(condBB);
 
         _builder->SetInsertPoint(endLoopBB);
@@ -229,27 +239,28 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
     if (op == "def") {
         // (def add (x) (*x x))
         // (def something ((x number) (y number)) -> number (+ x y))
-        auto fnName = expr->expList.at(1)->expString;
+        auto fnName = cls == nullptr ? expr->expList.at(1)->expString
+                                     : cls->getName().str() + "_" + expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
-        auto returnType =
-                hasReturnType ? toType(extractType(expr->expList.at(4))) : toType("number");
+        auto returnType = hasReturnType ? toType(extractType(expr->expList.at(4)), cls)
+                                        : toType("number", cls);
 
         auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
 
 
         // (def add (x) (* x x))
         // (def add ((x number) (y number)) -> number (+ x y))
-        auto extractParams = [this](const auto& subExpr) {
+        auto extractParams = [&](const auto& subExpr) {
             std::vector<llvm::Type*> paramsType;
             std::vector<std::string> paramsName;
             if (subExpr->expType == EvaExpr::ExpType::List) {
                 for (auto i = 0; i < subExpr->expList.size(); i++) {
-                    paramsType.push_back(toType(extractType(subExpr->expList.at(i))));
+                    paramsType.push_back(toType(extractType(subExpr->expList.at(i)), cls));
                     paramsName.push_back(extractName(subExpr->expList.at(i)));
                 }
             } else {
-                paramsType.push_back(toType(extractType(subExpr)));
+                paramsType.push_back(toType(extractType(subExpr), cls));
                 paramsName.push_back(extractName(subExpr));
             }
             return std::make_pair(std::move(paramsType), std::move(paramsName));
@@ -272,58 +283,132 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env,
             _builder->CreateStore(arg, varBinding);
         }
 
-        auto retFn = _builder->CreateRet(_generate(body, fnEnv, currentFn));
+        auto retFn = _builder->CreateRet(_generate(body, fnEnv, currentFn, cls));
         _builder->SetInsertPoint(lastBB);
         return retFn;
     }
 
+    // (class <name> <parent> <body>)
+    // (class Point null
+    // (begin
+    //    (var x 0)
+    //    (var y 0)
+    //    (def __init__ (self x y) 0 )
+    //    (def calc (self) (+ x y) )
+    if (op == "class") {
+        auto clsDef = _buildClassDef(expr);
+        return _generate(expr->expList.at(3), env, fn, clsDef->cls);
+    }
+
+    // (var point (new Point (10 20)))
+    if (op == "new") {
+        auto clsName = expr->expList.at(1)->expString;
+        auto clsDef = _classes.at(clsName);
+        if (!clsDef) {
+            throw std::runtime_error("Unknown class: " + clsName);
+        }
+
+        // auto instance = _builder->CreateAlloca(clsDef->cls, nullptr, clsName);
+        auto clsSize = _module->getDataLayout().getTypeAllocSize(clsDef->cls);
+        auto malloc = _module->getFunction("GC_malloc");
+        auto instancePtr = _builder->CreateCall(malloc, _builder->getInt64(clsSize));
+        auto instance = _builder->CreatePointerCast(instancePtr, clsDef->cls->getPointerTo());
+
+        auto constructorName = clsDef->name + "_" + "__init__";
+        const auto& constructor = _module->getFunction(constructorName);
+        if (!constructor) {
+            throw std::runtime_error("Cannot find constructor for class : " + clsName);
+        }
+
+        std::vector<llvm::Value*> args{instance};
+        for (auto& subExpr: expr->expList.at(2)->expList) {
+            args.push_back(_generate(subExpr, env, fn, cls));
+        }
+
+        _builder->CreateCall(constructor, args);
+        return instance;
+    }
+
+
     if (op == "+") {
-        BINARY_OP(CreateAdd, "add");
+        BINARY_OP(CreateAdd, "add", cls);
     }
     if (op == "-") {
-        BINARY_OP(CreateSub, "sub");
+        BINARY_OP(CreateSub, "sub", cls);
     }
     if (op == "*") {
-        BINARY_OP(CreateMul, "mul");
+        BINARY_OP(CreateMul, "mul", cls);
     }
     if (op == "/") {
-        BINARY_OP(CreateSDiv, "div");
+        BINARY_OP(CreateSDiv, "div", cls);
     }
     if (op == "<") {
-        BINARY_OP(CreateICmpSLT, "lt");
+        BINARY_OP(CreateICmpSLT, "lt", cls);
     }
     if (op == ">") {
-        BINARY_OP(CreateICmpSGT, "gt");
+        BINARY_OP(CreateICmpSGT, "gt", cls);
     }
     if (op == "==") {
-        BINARY_OP(CreateICmpEQ, "eq");
+        BINARY_OP(CreateICmpEQ, "eq", cls);
     }
     if (op == "!=") {
-        BINARY_OP(CreateICmpNE, "ne");
+        BINARY_OP(CreateICmpNE, "ne", cls);
     }
     if (op == "<=") {
-        BINARY_OP(CreateICmpSLE, "le");
+        BINARY_OP(CreateICmpSLE, "le", cls);
     }
     if (op == ">=") {
-        BINARY_OP(CreateICmpSGE, "ge");
+        BINARY_OP(CreateICmpSGE, "ge", cls);
     }
 
     const auto& callable = _module->getFunction(op);
     if (!callable) {
-        throw std::runtime_error("Unknown operator: " + op);
+        throw std::runtime_error("Unknown callable: " + op);
     }
 
     std::vector<llvm::Value*> args{};
     for (auto i = 1; i < expr->expList.size(); i++) {
         auto& subExpr = expr->expList.at(i);
-        auto arg = _generate(subExpr, env, fn);
+        auto arg = _generate(subExpr, env, fn, cls);
         args.push_back(arg);
     }
     return _builder->CreateCall(callable, args);
 }
 
-llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env,
-                               llvm::Function* fn) const {
+
+std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(
+        const std::unique_ptr<EvaExpr>& expr) const {
+    auto name = expr->expList.at(1)->expString;
+    auto parent = expr->expList.at(2)->expString;
+
+    if (_classes.contains(name)) {
+        throw std::runtime_error("Duplicate class definition: " + name);
+    }
+
+    _classes[name] = std::make_shared<ClassDef>(name, *_context);
+    auto classDef = _classes[name];
+    auto& cls = classDef->cls;
+
+    for (auto& subExpr: expr->expList.at(3)->expList) {
+        if (subExpr->expList.at(0)->expString == "var") {
+            auto varName = subExpr->expList.at(1)->expString;
+            auto varType = toType(extractType(subExpr->expList.at(1)), cls);
+            classDef->fields[varName] = varType;
+        }
+    }
+
+    std::vector<llvm::Type*> fieldsType;
+    for (const auto& [name, type]: classDef->fields) {
+        fieldsType.push_back(type);
+    }
+
+    cls->setBody(fieldsType, false);
+
+    return classDef;
+}
+
+llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
+                               llvm::StructType* cls) const {
     switch (expr->expType) {
         case EvaExpr::ExpType::Number:
             return _builder->getInt32(expr->expNumber);
@@ -348,11 +433,11 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env,
         case EvaExpr::ExpType::List: {
             if (const auto& subExpr = expr->expList.front();
                 subExpr->expType == EvaExpr::ExpType::Symbol) {
-                return handleOps(expr, env, fn);
+                return handleOps(expr, env, fn, cls);
             }
 
             for (const auto& subExpr: expr->expList) {
-                std::ignore = _generate(subExpr, env, fn);
+                std::ignore = _generate(subExpr, env, fn, cls);
             }
             return _builder->getInt32(0);
         }
@@ -409,6 +494,10 @@ void EvaLLM::_setupExternalFunctions() const {
     _module->getOrInsertFunction(
             "printf", llvm::FunctionType::get(_builder->getInt32Ty(),
                                               _builder->getInt8Ty()->getPointerTo(), true));
+
+    _module->getOrInsertFunction("GC_malloc",
+                                 llvm::FunctionType::get(_builder->getInt8Ty()->getPointerTo(),
+                                                         _builder->getInt64Ty(), false));
 }
 
 void EvaLLM::_setupGlobalEnviroment() const {

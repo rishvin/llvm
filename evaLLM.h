@@ -11,6 +11,18 @@ using Env = std::shared_ptr<EvaEnvironment>;
 
 class EvaLLM {
 public:
+    struct ClassDef : std::enable_shared_from_this<ClassDef> {
+        ClassDef(const std::string& name, llvm::LLVMContext& context) : name{name} {
+            cls = llvm::StructType::create(context, name);
+        }
+
+        llvm::StructType* parent = nullptr;
+        llvm::StructType* cls;
+        std::string name;
+        std::unordered_map<std::string, llvm::Type*> fields;
+        std::unordered_map<std::string, llvm::Function*> methods;
+    };
+
     explicit EvaLLM();
 
     void exec(const std::string& program, const std::string& outputFilename) const;
@@ -18,10 +30,14 @@ public:
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
-    llvm::Type* toType(const std::string& type) const;
-    llvm::Value* handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn) const;
+    llvm::Type* toType(const std::string& type, llvm::StructType* cls) const;
+    llvm::Value* handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
+                           llvm::StructType* cls) const;
 
-    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn) const;
+    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
+                           llvm::StructType* cls) const;
+
+    std::shared_ptr<ClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr) const;
 
     llvm::Value* _createGlobalVar(const std::string& name, llvm::Constant* init) const;
 
@@ -44,6 +60,7 @@ private:
 
     void _setupGlobalEnviroment() const;
 
+    mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classes;
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;
     mutable std::unique_ptr<llvm::IRBuilder<>> _builder;

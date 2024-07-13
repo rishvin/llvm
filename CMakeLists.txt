@@ -7,6 +7,7 @@ set(CMAKE_CXX_COMPILER "clang++")
 include_directories(/opt/homebrew/Cellar/llvm/18.1.5/include)
 include_directories(${CMAKE_BINARY_DIR})
 include_directories(${CMAKE_SOURCE_DIR})
+include_directories(/opt/homebrew/opt/bdw-gc/include)
 
 # Add custom commands to run Bison and Flex without interference
 add_custom_command(
@@ -37,13 +38,16 @@ target_compile_options(eva-llvm PRIVATE
         -D__STDC_LIMIT_MACROS
         -std=c++20
         -stdlib=libc++
+        -O0
 )
 target_link_libraries(eva-llvm PRIVATE
         -L/opt/homebrew/Cellar/llvm/18.1.5/lib
+        -L/opt/homebrew/opt/bdw-gc/lib
         -Wl,-search_paths_first
         -Wl,-headerpad_max_install_names
         -lLLVM-18
         -ll
+        /opt/homebrew/opt/bdw-gc/lib/libgc.a
         -g
 )
 
