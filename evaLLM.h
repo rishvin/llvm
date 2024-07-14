@@ -64,6 +64,7 @@ private:
 
 
     mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classes;
+    mutable std::unordered_map<std::string, std::string> _classesTypes;
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;
     mutable std::unique_ptr<llvm::IRBuilder<>> _builder;
