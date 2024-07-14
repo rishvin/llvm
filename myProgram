@@ -73,12 +73,17 @@
         (
             (var x 0)
             (var y 0)
-            (def __init__ (self x y) (0))
+            (def __init__ (self x y)
+              //  (set (prop self x) x)
+              //  (set (prop self y) y)
+              0
+            )
             (def setX (self a) (0))
             (def setY (self a) (0))
         )
     )
     (var (p Point) (new Point (10, 20)))
+    (set (prop p x) 40)
     (print "Point x = %d\n" (prop p x))
 )
 

@@ -186,6 +186,44 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
 
     if (op == "set") {
         // set x 10
+        // set (prop Point x) 10
+
+        if (expr->expList.at(1)->expType == EvaExpr::ExpType::List) {
+            auto& subExprList = expr->expList.at(1)->expList;
+            auto setOp = subExprList.at(0)->expString;
+            if (setOp == "prop") {
+                auto clsName = subExprList.at(1)->expString;
+                auto instance = _generate(subExprList.at(1), env, fn, cls);
+                auto instancePtr = llvm::dyn_cast<llvm::AllocaInst>(instance);
+                auto clsType = instancePtr->getAllocatedType(); // Struct actual type.
+
+                // The instance will of actual class type, but we need to get the pointer to the
+                // class type.
+                // auto instancePtr = _builder->CreateAlloca(clsType, nullptr);
+                //_builder->CreateStore(instance, instancePtr);
+
+                auto clsDef = _classes.at(clsType->getStructName().data());
+                if (!clsDef) {
+                    throw std::runtime_error("Unknown class: " + clsName);
+                }
+                auto fieldName = subExprList.at(2)->expString;
+                if (!clsDef->fields.contains(fieldName)) {
+                    throw std::runtime_error("Unknown field: " + fieldName);
+                }
+
+                auto field = clsDef->fields.at(fieldName);
+                auto fieldIndex = field.first;
+
+                auto address = _builder->CreateStructGEP(clsType, instancePtr, fieldIndex);
+
+                // Use GetElementPtr to get the field.
+                auto newValue = _generate(expr->expList.at(2), env, fn, cls);
+                return _builder->CreateStore(newValue, address);
+            }
+
+            throw std::runtime_error("Unknown set operation: " + setOp);
+        }
+
         auto name = expr->expList.at(1)->expString;
         auto valBinding = env->get(name);
         auto newValue = _generate(expr->expList.at(2), env, fn, cls);
@@ -343,12 +381,13 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     if (op == "prop") {
         auto clsName = expr->expList.at(1)->expString;
         auto instance = _generate(expr->expList.at(1), env, fn, cls);
+        auto instancePtr = llvm::dyn_cast<llvm::AllocaInst>(instance);
 
-        auto cls = instance->getType(); // Struct actual type.
+        auto cls = instancePtr->getAllocatedType(); // Struct actual type.
 
         // The instance will of actual class type, but we need to get the pointer to the class type.
-        auto instancePtr = _builder->CreateAlloca(cls, nullptr, "ptr" + clsName);
-        _builder->CreateStore(instance, instancePtr);
+        // auto instancePtr = _builder->CreateAlloca(cls, nullptr, "ptr" + clsName);
+        // _builder->CreateStore(instance, instancePtr);
 
         auto clsDef = _classes.at(cls->getStructName().data());
         if (!clsDef) {
@@ -460,6 +499,14 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env, ll
             const auto symbol = env->get(expr->expString);
 
             if (const auto localVar = llvm::dyn_cast<llvm::AllocaInst>(symbol)) {
+                if (localVar->getAllocatedType()->isStructTy()) {
+                    // Just return the pointer to the struct if the symbol is a struct and is
+                    // already present in the _classes mao.
+                    if (_classes.contains(localVar->getAllocatedType()->getStructName().data())) {
+                        return localVar;
+                    }
+                }
+
                 return _builder->CreateLoad(localVar->getAllocatedType(), localVar,
                                             expr->expString);
             }
