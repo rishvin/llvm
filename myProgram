@@ -79,13 +79,17 @@
                     (set (prop self y) y)
                 )
             )
-            (def setX (self a) (0))
-            (def setY (self a) (0))
-        )
-    )
+
+            (def __str__ (self)
+                (
+                             (print "Point x = %d\n" (prop self x))
+                )
+            )
+      )
+   )
     (var (p Point) (new Point (10, 20)))
     (set (prop p x) 40)
     (print "Point x = %d\n" (prop p x))
-     (print "Point y = %d\n" (prop p y))
+    (print "Point y = %d\n" (prop p y))
 )
 
