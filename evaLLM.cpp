@@ -24,16 +24,6 @@ namespace {
         return subExpr->expString;
     };
 
-    auto extractType = [](const auto& subExpr) -> std::string {
-        if (subExpr->expType == EvaExpr::ExpType::List) {
-            if (subExpr->expList.at(0)->expString == "self") {
-                return "self";
-            }
-            return subExpr->expList.at(1)->expString;
-        }
-        return subExpr->expString == "self" ? "self" : "number";
-    };
-
     std::string unRawString(const std::string& raw) {
         std::string output;
         output.reserve(raw.size());
@@ -118,28 +108,42 @@ void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
     verifyFunction(*mainFn);
 }
 
-llvm::Type* EvaLLM::strToType(const std::string& type, Env env) const {
-    auto scopedCls = env->getClassScope();
-    if (type == "self") {
-        if (!scopedCls) {
-            throw std::runtime_error("self is not allowed here");
+EvaType EvaLLM::getType(const EvaExpr& expr, Env env) const {
+    auto toType = [&](const std::string& strType) {
+        // The `self` keyword is used to refer to the current class instance.
+        if (strType == "self") {
+            auto scopedCls = env->getClassScope();
+            if (!scopedCls) {
+                throw std::runtime_error("self is not allowed here");
+            }
+            return EvaType{scopedCls->getPointerTo(), scopedCls->getName().str()};
         }
-        return scopedCls->getPointerTo();
-    }
 
-    if (type == "number") {
-        return _builder->getInt32Ty();
-    }
-    if (type == "string") {
-        return _builder->getInt8Ty()->getPointerTo();
-    }
+        if (strType == "number") {
+            return EvaType{_builder->getInt32Ty(), "int32"};
+        }
 
-    if (_classNameToDefMap.contains(type)) {
-        auto clsDef = _classNameToDefMap.at(type);
-        return clsDef->underlyingStruct->getPointerTo();
-    }
+        if (strType == "string") {
+            return EvaType{_builder->getInt8Ty()->getPointerTo(), "str"};
+        }
 
-    return _builder->getInt32Ty();
+        // Case when the type is a class name.
+        if (_classNameToDefMap.contains(strType)) {
+            auto clsDef = _classNameToDefMap.at(strType);
+            return EvaType{clsDef->underlyingStruct->getPointerTo(), clsDef->name};
+        }
+
+        return EvaType{_builder->getInt32Ty(), "int32"};
+    };
+
+    if (expr.expType == EvaExpr::ExpType::List) {
+        if (expr.expList.at(0)->expString == "self") {
+            return toType("self");
+        }
+
+        return toType(expr.expList.at(1)->expString);
+    }
+    return toType(expr.expString);
 }
 
 EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const {
@@ -169,13 +173,13 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         // This cls parameter is used to handle the self keyword when someone creates a variable
         // inside the struct body.
-        auto typeStr = extractType(expr->expList.at(1));
-        const auto& type = strToType(typeStr, env);
+        const auto type = getType(*expr->expList.at(1), env);
 
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
 
-        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, typeStr, env);
+        auto varBinding =
+                allocateVariable(env->getFunctionScope(), name, *type, type.metadata, env);
         _builder->CreateStore(init.value, varBinding);
 
         return init;
@@ -309,8 +313,8 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                                         expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
-        auto returnType = hasReturnType ? strToType(extractType(expr->expList.at(4)), env)
-                                        : strToType("number", env);
+        auto returnType = hasReturnType ? getType(*expr->expList.at(4), env)
+                                        : getType(EvaExpr{"number"}, env);
 
         auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
 
@@ -331,20 +335,20 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
             if (subExpr->expType == EvaExpr::ExpType::List) {
                 for (auto i = 0; i < subExpr->expList.size(); i++) {
                     auto name = extractName(subExpr->expList.at(i));
-                    auto type = strToType(name, env);
+                    auto type = getType(*subExpr->expList.at(i), env);
                     auto& metadata = name;
 
                     params.names.push_back(name);
-                    params.types.push_back(type);
+                    params.types.push_back(*type);
                     params.metadatas.push_back(metadata);
                 }
             } else {
                 auto name = extractName(subExpr);
-                auto type = strToType(name, env);
+                auto type = getType(*subExpr, env);
                 auto& metadata = name;
 
                 params.names.push_back(name);
-                params.types.push_back(type);
+                params.types.push_back(*type);
                 params.metadatas.push_back(metadata);
             }
 
@@ -354,7 +358,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         auto lastBB = _builder->GetInsertBlock();
 
         auto currentFn = _createFunction(
-                fnName, llvm::FunctionType::get(returnType, params.types, false), env);
+                fnName, llvm::FunctionType::get(*returnType, params.types, false), env);
 
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
         fnEnv->setFunctionScope(currentFn);
@@ -524,8 +528,8 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(const std::unique_ptr<E
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
-            auto varType = strToType(extractType(subExpr->expList.at(1)), newEnv);
-            classDef->fields[varName] = std::make_pair(varIdx++, varType);
+            auto varType = getType(*subExpr->expList.at(1), newEnv);
+            classDef->fields[varName] = std::make_pair(varIdx++, *varType);
         }
     }
 

@@ -16,6 +16,17 @@ struct EvaValue {
     llvm::Value *value;
     std::any metadata;
 };
+
+struct EvaType {
+    explicit EvaType(llvm::Type *type, std::any metadata = {}) :
+        type{type}, metadata{std::move(metadata)} {}
+
+    llvm::Type *operator*() const { return type; }
+
+    llvm::Type *type;
+    std::any metadata;
+};
+
 inline EvaValue EvaValueNull{nullptr};
 
 class EvaEnvironment : public std::enable_shared_from_this<EvaEnvironment> {

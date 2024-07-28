@@ -32,7 +32,7 @@ public:
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
-    llvm::Type* strToType(const std::string& type, Env env) const;
+    EvaType getType(const EvaExpr& expr, Env env) const;
 
     EvaValue handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
