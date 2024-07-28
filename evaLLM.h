@@ -53,7 +53,7 @@ private:
     llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn = nullptr) const;
 
     llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
-                                  Env env) const;
+                                  const std::any& metadata, Env env) const;
 
     void _setupExternalFunctions() const;
 
@@ -63,7 +63,6 @@ private:
 
 
     mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classNameToDefMap;
-    mutable std::unordered_map<std::string, std::string> _classesTypes;
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;
     mutable std::unique_ptr<llvm::IRBuilder<>> _builder;

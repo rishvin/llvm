@@ -1,18 +1,20 @@
 #pragma once
 
+#include <any>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Value.h>
 #include <unordered_map>
+#include <utility>
 
 struct EvaValue {
     explicit EvaValue() : value{nullptr} {}
-    EvaValue(llvm::Value *value, std::string metadata = "") :
+    EvaValue(llvm::Value *value, std::any metadata = {}) :
         value{value}, metadata{std::move(metadata)} {}
 
     llvm::Value *operator*() const { return value; }
 
     llvm::Value *value;
-    std::string metadata;
+    std::any metadata;
 };
 inline EvaValue EvaValueNull{nullptr};
 

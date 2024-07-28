@@ -172,14 +172,10 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         auto typeStr = extractType(expr->expList.at(1));
         const auto& type = strToType(typeStr, env);
 
-        if (_classNameToDefMap.contains(typeStr)) {
-            _classesTypes[name] = typeStr;
-        }
-
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
 
-        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, env);
+        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, typeStr, env);
         _builder->CreateStore(init.value, varBinding);
 
         return init;
@@ -211,8 +207,8 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                         return {instance, env->getClassScope()};
                     }
 
-                    return {instance, _classNameToDefMap.at(_classesTypes.at(instanceName))
-                                              ->underlyingStruct};
+                    auto clsName = std::any_cast<std::string>(instance.metadata);
+                    return {instance, _classNameToDefMap.at(clsName)->underlyingStruct};
                 }();
 
                 // The instance will of actual class type, but we need to get the pointer to the
@@ -321,36 +317,53 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         // (def add (x) (* x x))
         // (def add ((x number) (y number)) -> number (+ x y))
-        auto extractParams = [&](const auto& subExpr) {
-            std::vector<llvm::Type*> paramsType;
-            std::vector<std::string> paramsName;
-            if (subExpr->expType == EvaExpr::ExpType::List) {
-                for (auto i = 0; i < subExpr->expList.size(); i++) {
-                    paramsType.push_back(strToType(extractType(subExpr->expList.at(i)), env));
-                    paramsName.push_back(extractName(subExpr->expList.at(i)));
-                }
-            } else {
-                paramsType.push_back(strToType(extractType(subExpr), env));
-                paramsName.push_back(extractName(subExpr));
-            }
-            return std::make_pair(std::move(paramsType), std::move(paramsName));
+        struct Params {
+            std::vector<std::string> names;
+            std::vector<llvm::Type*> types;
+            std::vector<std::any> metadatas;
+
+            [[nodiscard]] int size() const { return names.size(); }
         };
 
+        auto params = [&](const auto& subExpr) {
+            Params params;
 
-        auto params = extractParams(expr->expList.at(2));
+            if (subExpr->expType == EvaExpr::ExpType::List) {
+                for (auto i = 0; i < subExpr->expList.size(); i++) {
+                    auto name = extractName(subExpr->expList.at(i));
+                    auto type = strToType(name, env);
+                    auto& metadata = name;
+
+                    params.names.push_back(name);
+                    params.types.push_back(type);
+                    params.metadatas.push_back(metadata);
+                }
+            } else {
+                auto name = extractName(subExpr);
+                auto type = strToType(name, env);
+                auto& metadata = name;
+
+                params.names.push_back(name);
+                params.types.push_back(type);
+                params.metadatas.push_back(metadata);
+            }
+
+            return params;
+        }(expr->expList.at(2));
 
         auto lastBB = _builder->GetInsertBlock();
 
         auto currentFn = _createFunction(
-                fnName, llvm::FunctionType::get(returnType, params.first, false), env);
+                fnName, llvm::FunctionType::get(returnType, params.types, false), env);
 
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
         fnEnv->setFunctionScope(currentFn);
 
-        for (auto i = 0; i < params.second.size(); i++) {
+        for (auto i = 0; i < params.size(); i++) {
             auto arg = currentFn->getArg(i);
-            arg->setName(params.second[i]);
-            auto varBinding = allocateVariable(currentFn, params.second[i], params.first[i], fnEnv);
+            arg->setName(params.names[i]);
+            auto varBinding = allocateVariable(currentFn, params.names[i], params.types[i],
+                                               params.metadatas[i], fnEnv);
             _builder->CreateStore(arg, varBinding);
         }
 
@@ -417,12 +430,8 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                 return {instance, env->getClassScope()};
             }
 
-            if (!_classesTypes.contains(clsInstanceName)) {
-                throw std::runtime_error("Unknown class instance: " + clsInstanceName);
-            }
-
-            return {instance,
-                    _classNameToDefMap.at(_classesTypes.at(clsInstanceName))->underlyingStruct};
+            auto clsName = std::any_cast<std::string>(instance.metadata);
+            return {instance, _classNameToDefMap.at(clsName)->underlyingStruct};
         }();
 
         // The instance will of actual class type, but we need to get the pointer to the class type.
@@ -619,11 +628,11 @@ llvm::BasicBlock* EvaLLM::_createBB(const std::string& name, llvm::Function* fn)
 }
 
 llvm::Value* EvaLLM::allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
-                                      const Env env) const {
+                                      const std::any& metadata, const Env env) const {
     const auto currentBuilder = std::make_unique<llvm::IRBuilder<>>(*_context);
     currentBuilder->SetInsertPoint(&fn->getEntryBlock(), fn->getEntryBlock().begin());
     const auto allocVar = currentBuilder->CreateAlloca(type, nullptr, name);
-    env->insert(name, allocVar);
+    env->insert(name, {allocVar, metadata});
     return allocVar;
 }
 
