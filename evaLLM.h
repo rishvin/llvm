@@ -52,8 +52,8 @@ private:
 
     llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn = nullptr) const;
 
-    llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
-                                  const std::any& metadata, Env env) const;
+    llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
+                                  Env env) const;
 
     void _setupExternalFunctions() const;
 

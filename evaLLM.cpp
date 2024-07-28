@@ -178,8 +178,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
 
-        auto varBinding =
-                allocateVariable(env->getFunctionScope(), name, *type, type.metadata, env);
+        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, env);
         _builder->CreateStore(init.value, varBinding);
 
         return init;
@@ -323,8 +322,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         // (def add ((x number) (y number)) -> number (+ x y))
         struct Params {
             std::vector<std::string> names;
-            std::vector<llvm::Type*> types;
-            std::vector<std::any> metadatas;
+            std::vector<EvaType> types;
 
             [[nodiscard]] int size() const { return names.size(); }
         };
@@ -339,8 +337,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                     auto& metadata = name;
 
                     params.names.push_back(name);
-                    params.types.push_back(*type);
-                    params.metadatas.push_back(metadata);
+                    params.types.push_back(type);
                 }
             } else {
                 auto name = extractName(subExpr);
@@ -348,8 +345,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                 auto& metadata = name;
 
                 params.names.push_back(name);
-                params.types.push_back(*type);
-                params.metadatas.push_back(metadata);
+                params.types.push_back(type);
             }
 
             return params;
@@ -357,8 +353,12 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         auto lastBB = _builder->GetInsertBlock();
 
-        auto currentFn = _createFunction(
-                fnName, llvm::FunctionType::get(*returnType, params.types, false), env);
+        std::vector<llvm::Type*> fnTypes;
+        std::transform(params.types.begin(), params.types.end(), std::back_inserter(fnTypes),
+                       [](const auto& type) { return *type; });
+
+        auto currentFn =
+                _createFunction(fnName, llvm::FunctionType::get(*returnType, fnTypes, false), env);
 
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
         fnEnv->setFunctionScope(currentFn);
@@ -366,8 +366,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         for (auto i = 0; i < params.size(); i++) {
             auto arg = currentFn->getArg(i);
             arg->setName(params.names[i]);
-            auto varBinding = allocateVariable(currentFn, params.names[i], params.types[i],
-                                               params.metadatas[i], fnEnv);
+            auto varBinding = allocateVariable(currentFn, params.names[i], params.types[i], fnEnv);
             _builder->CreateStore(arg, varBinding);
         }
 
@@ -631,12 +630,12 @@ llvm::BasicBlock* EvaLLM::_createBB(const std::string& name, llvm::Function* fn)
     return llvm::BasicBlock::Create(*_context, name, fn);
 }
 
-llvm::Value* EvaLLM::allocateVariable(llvm::Function* fn, const std::string& name, llvm::Type* type,
-                                      const std::any& metadata, const Env env) const {
+llvm::Value* EvaLLM::allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
+                                      const Env env) const {
     const auto currentBuilder = std::make_unique<llvm::IRBuilder<>>(*_context);
     currentBuilder->SetInsertPoint(&fn->getEntryBlock(), fn->getEntryBlock().begin());
-    const auto allocVar = currentBuilder->CreateAlloca(type, nullptr, name);
-    env->insert(name, {allocVar, metadata});
+    const auto allocVar = currentBuilder->CreateAlloca(*type, nullptr, name);
+    env->insert(name, {allocVar, type.metadata});
     return allocVar;
 }
 
