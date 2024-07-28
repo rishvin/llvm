@@ -13,11 +13,11 @@ class EvaLLM {
 public:
     struct ClassDef : std::enable_shared_from_this<ClassDef> {
         ClassDef(const std::string& name, llvm::LLVMContext& context) : name{name} {
-            cls = llvm::StructType::create(context, name);
+            underlyingStruct = llvm::StructType::create(context, name);
         }
 
         llvm::StructType* parent = nullptr;
-        llvm::StructType* cls;
+        llvm::StructType* underlyingStruct;
         std::string name;
         std::unordered_map<std::string, std::pair<int, llvm::Type*>> fields;
         std::unordered_map<std::string, llvm::Function*> methods;
@@ -32,13 +32,13 @@ public:
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
-    llvm::Type* toType(const std::string& type, llvm::StructType* cls) const;
+    llvm::Type* strToType(const std::string& type, Env env) const;
 
     EvaValue handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
     EvaValue _generate(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
-    std::shared_ptr<ClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr) const;
+    std::shared_ptr<ClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
     llvm::Value* _createGlobalVar(const std::string& name, llvm::Constant* init) const;
 
@@ -62,7 +62,7 @@ private:
     void _setupGlobalEnviroment() const;
 
 
-    mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classes;
+    mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classNameToDefMap;
     mutable std::unordered_map<std::string, std::string> _classesTypes;
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;

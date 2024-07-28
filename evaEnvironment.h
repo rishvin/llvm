@@ -6,8 +6,10 @@
 
 struct EvaValue {
     explicit EvaValue() : value{nullptr} {}
-    explicit EvaValue(llvm::Value *value, std::string metadata = "") :
+    EvaValue(llvm::Value *value, std::string metadata = "") :
         value{value}, metadata{std::move(metadata)} {}
+
+    llvm::Value *operator*() const { return value; }
 
     llvm::Value *value;
     std::string metadata;
