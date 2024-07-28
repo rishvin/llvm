@@ -108,7 +108,7 @@ void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
     verifyFunction(*mainFn);
 }
 
-EvaType EvaLLM::getType(const EvaExpr& expr, Env env) const {
+EvaType EvaLLM::extractType(const EvaExpr& expr, Env env) const {
     auto toType = [&](const std::string& strType) {
         // The `self` keyword is used to refer to the current class instance.
         if (strType == "self") {
@@ -173,7 +173,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         // This cls parameter is used to handle the self keyword when someone creates a variable
         // inside the struct body.
-        const auto type = getType(*expr->expList.at(1), env);
+        const auto type = extractType(*expr->expList.at(1), env);
 
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
@@ -313,8 +313,8 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                                         expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
-        auto returnType = hasReturnType ? getType(*expr->expList.at(4), env)
-                                        : getType(EvaExpr{"number"}, env);
+        auto returnType = hasReturnType ? extractType(*expr->expList.at(4), env)
+                                        : extractType(EvaExpr{"number"}, env);
 
         auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
 
@@ -335,7 +335,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
             if (subExpr->expType == EvaExpr::ExpType::List) {
                 for (auto i = 0; i < subExpr->expList.size(); i++) {
                     auto name = extractName(subExpr->expList.at(i));
-                    auto type = getType(*subExpr->expList.at(i), env);
+                    auto type = extractType(*subExpr->expList.at(i), env);
                     auto& metadata = name;
 
                     params.names.push_back(name);
@@ -344,7 +344,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                 }
             } else {
                 auto name = extractName(subExpr);
-                auto type = getType(*subExpr, env);
+                auto type = extractType(*subExpr, env);
                 auto& metadata = name;
 
                 params.names.push_back(name);
@@ -528,7 +528,7 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(const std::unique_ptr<E
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
-            auto varType = getType(*subExpr->expList.at(1), newEnv);
+            auto varType = extractType(*subExpr->expList.at(1), newEnv);
             classDef->fields[varName] = std::make_pair(varIdx++, *varType);
         }
     }
