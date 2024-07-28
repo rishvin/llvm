@@ -10,9 +10,9 @@
 
 extern int yydebug;
 
-#define BINARY_OP(OP, NAME, CLS)                             \
-    auto lhs = _generate(expr->expList.at(1), env, fn, cls); \
-    auto rhs = _generate(expr->expList.at(2), env, fn, cls); \
+#define BINARY_OP(OP, NAME)                         \
+    auto lhs = _generate(expr->expList.at(1), env); \
+    auto rhs = _generate(expr->expList.at(2), env); \
     return _builder->OP(lhs, rhs, NAME);
 
 namespace {
@@ -107,7 +107,9 @@ void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
     llvm::Function* mainFn = _createFunction(
             "main", llvm::FunctionType::get(_builder->getInt32Ty(), false), _globalEnv);
 
-    auto result = _generate(expr, _globalEnv, mainFn, nullptr);
+    _globalEnv->setFunctionScope(mainFn);
+
+    auto result = _generate(expr, _globalEnv);
     result = _builder->CreateIntCast(result, _builder->getInt32Ty(), true);
     _builder->CreateRet(result);
 
@@ -137,8 +139,7 @@ llvm::Type* EvaLLM::toType(const std::string& type, llvm::StructType* cls) const
     return _builder->getInt32Ty();
 }
 
-llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
-                               llvm::StructType* cls) const {
+llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const {
     auto op = expr->expList.front()->expString;
 
     if (op == "print") {
@@ -146,7 +147,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
         std::vector<llvm::Value*> args{};
         for (auto i = 1; i < expr->expList.size(); i++) {
             auto& subExpr = expr->expList.at(i);
-            auto arg = _generate(subExpr, env, fn, cls);
+            auto arg = _generate(subExpr, env);
             args.push_back(arg);
         }
         return _builder->CreateCall(printFn, args);
@@ -164,16 +165,16 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
         // This cls parameter is used to handle the self keyword when someone creates a variable
         // inside the struct body.
         auto typeStr = extractType(expr->expList.at(1));
-        const auto& type = toType(typeStr, cls);
+        const auto& type = toType(typeStr, env->getClassScope());
 
         if (_classes.contains(typeStr)) {
             _classesTypes[name] = typeStr;
         }
 
         const auto& subExpr = expr->expList.at(2);
-        const auto& init = _generate(subExpr, env, fn, cls);
+        const auto& init = _generate(subExpr, env);
 
-        auto varBinding = allocateVariable(fn, name, type, env);
+        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, env);
         _builder->CreateStore(init, varBinding);
 
         return init;
@@ -184,7 +185,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
         llvm::Value* result = nullptr;
         for (auto i = 1; i < expr->expList.size(); i++) {
             auto& subExpr = expr->expList.at(i);
-            result = _generate(subExpr, currentEnv, fn, cls);
+            result = _generate(subExpr, currentEnv);
         }
         return result;
     }
@@ -198,11 +199,11 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
             auto setOp = subExprList.at(0)->expString;
             if (setOp == "prop") {
                 auto instanceName = subExprList.at(1)->expString;
-                auto instance = _generate(subExprList.at(1), env, fn, cls);
+                auto instance = _generate(subExprList.at(1), env);
 
                 auto [instancePtr, clsType] = [&]() -> std::pair<llvm::Value*, llvm::StructType*> {
-                    if (cls != nullptr) {
-                        return {instance, cls};
+                    if (env->getClassScope() != nullptr) {
+                        return {instance, env->getClassScope()};
                     }
 
                     return {instance, _classes.at(_classesTypes.at(instanceName))->cls};
@@ -230,7 +231,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
                 auto address = _builder->CreateStructGEP(clsType, instance, fieldIndex);
 
                 // Use GetElementPtr to get the field.
-                auto newValue = _generate(expr->expList.at(2), env, fn, cls);
+                auto newValue = _generate(expr->expList.at(2), env);
                 return _builder->CreateStore(newValue, address);
             }
 
@@ -239,31 +240,32 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
 
         auto name = expr->expList.at(1)->expString;
         auto valBinding = env->get(name);
-        auto newValue = _generate(expr->expList.at(2), env, fn, cls);
-        _builder->CreateStore(newValue, valBinding);
+        auto newValue = _generate(expr->expList.at(2), env);
+        _builder->CreateStore(newValue, valBinding.value);
         return newValue;
     }
 
     // (if (== x 10) (print "x is 10") (print "x is not 10"))
     if (op == "if") {
         // if (cond) (then) (else)
-        auto cond = _generate(expr->expList.at(1), env, fn, cls);
-        auto thenBB = _createBB("then", fn);
-        auto elseBB = _createBB("else", fn);
+        auto cond = _generate(expr->expList.at(1), env);
+        auto thenBB = _createBB("then", env->getFunctionScope());
+        auto elseBB = _createBB("else", env->getFunctionScope());
         auto ifEndBB = _createBB("ifEnd");
 
         _builder->CreateCondBr(cond, thenBB, elseBB);
         _builder->SetInsertPoint(thenBB);
-        auto thenRes = _generate(expr->expList.at(2), env, fn, cls);
+        auto thenRes = _generate(expr->expList.at(2), env);
         _builder->CreateBr(ifEndBB);
         thenBB = _builder->GetInsertBlock();
 
         _builder->SetInsertPoint(elseBB);
-        auto elseRes = _generate(expr->expList.at(3), env, fn, cls);
+        auto elseRes = _generate(expr->expList.at(3), env);
         _builder->CreateBr(ifEndBB);
         elseBB = _builder->GetInsertBlock();
 
 
+        auto fn = env->getFunctionScope();
         fn->insert(--fn->end(), ifEndBB);
         _builder->SetInsertPoint(ifEndBB);
 
@@ -279,17 +281,17 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     // cond
 
     if (op == "while") {
-        auto condBB = _createBB("whileCond", fn);
-        auto loopBB = _createBB("whileLoop", fn);
-        auto endLoopBB = _createBB("whileLoopEnd", fn);
+        auto condBB = _createBB("whileCond", env->getFunctionScope());
+        auto loopBB = _createBB("whileLoop", env->getFunctionScope());
+        auto endLoopBB = _createBB("whileLoopEnd", env->getFunctionScope());
 
         _builder->CreateBr(condBB);
         _builder->SetInsertPoint(condBB);
-        auto cond = _generate(expr->expList.at(1), env, fn, cls);
+        auto cond = _generate(expr->expList.at(1), env);
         _builder->CreateCondBr(cond, loopBB, endLoopBB);
 
         _builder->SetInsertPoint(loopBB);
-        auto whileRes = _generate(expr->expList.at(2), env, fn, nullptr);
+        auto whileRes = _generate(expr->expList.at(2), env);
         _builder->CreateBr(condBB);
 
         _builder->SetInsertPoint(endLoopBB);
@@ -299,12 +301,15 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     if (op == "def") {
         // (def add (x) (*x x))
         // (def something ((x number) (y number)) -> number (+ x y))
-        auto fnName = cls == nullptr ? expr->expList.at(1)->expString
-                                     : cls->getName().str() + "_" + expr->expList.at(1)->expString;
+        auto fnName = env->getClassScope() == nullptr
+                              ? expr->expList.at(1)->expString
+                              : env->getClassScope()->getName().str() + "_" +
+                                        expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
-        auto returnType = hasReturnType ? toType(extractType(expr->expList.at(4)), cls)
-                                        : toType("number", cls);
+        auto returnType = hasReturnType
+                                  ? toType(extractType(expr->expList.at(4)), env->getClassScope())
+                                  : toType("number", env->getClassScope());
 
         auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
 
@@ -316,11 +321,12 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
             std::vector<std::string> paramsName;
             if (subExpr->expType == EvaExpr::ExpType::List) {
                 for (auto i = 0; i < subExpr->expList.size(); i++) {
-                    paramsType.push_back(toType(extractType(subExpr->expList.at(i)), cls));
+                    paramsType.push_back(
+                            toType(extractType(subExpr->expList.at(i)), env->getClassScope()));
                     paramsName.push_back(extractName(subExpr->expList.at(i)));
                 }
             } else {
-                paramsType.push_back(toType(extractType(subExpr), cls));
+                paramsType.push_back(toType(extractType(subExpr), env->getClassScope()));
                 paramsName.push_back(extractName(subExpr));
             }
             return std::make_pair(std::move(paramsType), std::move(paramsName));
@@ -335,6 +341,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
                 fnName, llvm::FunctionType::get(returnType, params.first, false), env);
 
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
+        fnEnv->setFunctionScope(currentFn);
 
         for (auto i = 0; i < params.second.size(); i++) {
             auto arg = currentFn->getArg(i);
@@ -343,7 +350,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
             _builder->CreateStore(arg, varBinding);
         }
 
-        auto retFn = _builder->CreateRet(_generate(body, fnEnv, currentFn, cls));
+        auto retFn = _builder->CreateRet(_generate(body, fnEnv));
         _builder->SetInsertPoint(lastBB);
         return retFn;
     }
@@ -357,7 +364,11 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     //    (def calc (self) (+ x y) )
     if (op == "class") {
         auto clsDef = _buildClassDef(expr);
-        return _generate(expr->expList.at(3), env, fn, clsDef->cls);
+
+        auto newEnv = std::make_shared<EvaEnvironment>(env);
+        newEnv->setClassScope(clsDef->cls);
+
+        return _generate(expr->expList.at(3), newEnv);
     }
 
     // (var point (new Point (10 20)))
@@ -383,7 +394,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
 
         std::vector<llvm::Value*> args{instance};
         for (auto& subExpr: expr->expList.at(2)->expList) {
-            args.push_back(_generate(subExpr, env, fn, cls));
+            args.push_back(_generate(subExpr, env));
         }
 
         _builder->CreateCall(constructor, args);
@@ -393,11 +404,11 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     // prop point x
     if (op == "prop") {
         auto clsInstanceName = expr->expList.at(1)->expString;
-        auto instance = _generate(expr->expList.at(1), env, fn, cls);
+        auto instance = _generate(expr->expList.at(1), env);
 
         auto [instancePtr, clsType] = [&]() -> std::pair<llvm::Value*, llvm::StructType*> {
-            if (cls != nullptr) {
-                return {instance, cls};
+            if (env->getClassScope() != nullptr) {
+                return {instance, env->getClassScope()};
             }
 
             if (!_classesTypes.contains(clsInstanceName)) {
@@ -431,34 +442,34 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
 
 
     if (op == "+") {
-        BINARY_OP(CreateAdd, "add", cls);
+        BINARY_OP(CreateAdd, "add");
     }
     if (op == "-") {
-        BINARY_OP(CreateSub, "sub", cls);
+        BINARY_OP(CreateSub, "sub");
     }
     if (op == "*") {
-        BINARY_OP(CreateMul, "mul", cls);
+        BINARY_OP(CreateMul, "mul");
     }
     if (op == "/") {
-        BINARY_OP(CreateSDiv, "div", cls);
+        BINARY_OP(CreateSDiv, "div");
     }
     if (op == "<") {
-        BINARY_OP(CreateICmpSLT, "lt", cls);
+        BINARY_OP(CreateICmpSLT, "lt");
     }
     if (op == ">") {
-        BINARY_OP(CreateICmpSGT, "gt", cls);
+        BINARY_OP(CreateICmpSGT, "gt");
     }
     if (op == "==") {
-        BINARY_OP(CreateICmpEQ, "eq", cls);
+        BINARY_OP(CreateICmpEQ, "eq");
     }
     if (op == "!=") {
-        BINARY_OP(CreateICmpNE, "ne", cls);
+        BINARY_OP(CreateICmpNE, "ne");
     }
     if (op == "<=") {
-        BINARY_OP(CreateICmpSLE, "le", cls);
+        BINARY_OP(CreateICmpSLE, "le");
     }
     if (op == ">=") {
-        BINARY_OP(CreateICmpSGE, "ge", cls);
+        BINARY_OP(CreateICmpSGE, "ge");
     }
 
     const auto& callable = _module->getFunction(op);
@@ -469,7 +480,7 @@ llvm::Value* EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, ll
     std::vector<llvm::Value*> args{};
     for (auto i = 1; i < expr->expList.size(); i++) {
         auto& subExpr = expr->expList.at(i);
-        auto arg = _generate(subExpr, env, fn, cls);
+        auto arg = _generate(subExpr, env);
         args.push_back(arg);
     }
     return _builder->CreateCall(callable, args);
@@ -509,8 +520,7 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(
     return classDef;
 }
 
-llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
-                               llvm::StructType* cls) const {
+llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const {
     switch (expr->expType) {
         case EvaExpr::ExpType::Number:
             return _builder->getInt32(expr->expNumber);
@@ -521,7 +531,7 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env, ll
         case EvaExpr::ExpType::Symbol: {
             const auto symbol = env->get(expr->expString);
 
-            if (const auto localVar = llvm::dyn_cast<llvm::AllocaInst>(symbol)) {
+            if (const auto localVar = llvm::dyn_cast<llvm::AllocaInst>(symbol.value)) {
                 if (localVar->getAllocatedType()->isStructTy()) {
                     // Just return the pointer to the struct if the symbol is a struct and is
                     // already present in the _classes mao.
@@ -537,20 +547,20 @@ llvm::Value* EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env, ll
                                             expr->expString);
             }
 
-            if (const auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(symbol)) {
+            if (const auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(symbol.value)) {
                 return _builder->CreateLoad(globalVar->getInitializer()->getType(), globalVar,
-                                            symbol->getName());
+                                            symbol.value->getName());
             }
             return _builder->getInt32(0);
         }
         case EvaExpr::ExpType::List: {
             if (const auto& subExpr = expr->expList.front();
                 subExpr->expType == EvaExpr::ExpType::Symbol) {
-                return handleOps(expr, env, fn, cls);
+                return handleOps(expr, env);
             }
 
             for (const auto& subExpr: expr->expList) {
-                std::ignore = _generate(subExpr, env, fn, cls);
+                std::ignore = _generate(subExpr, env);
             }
             return _builder->getInt32(0);
         }
@@ -581,7 +591,7 @@ llvm::Function* EvaLLM::_createFunction(const std::string& name, llvm::FunctionT
 llvm::Function* EvaLLM::_createFunctionProto(const std::string& name, llvm::FunctionType* fnType,
                                              Env env) const {
     auto fn = llvm::Function::Create(fnType, llvm::Function::ExternalLinkage, name, *_module);
-    env->insert(name, fn);
+    env->insert(name, {fn, fn->getType()});
     return fn;
 }
 
@@ -599,7 +609,7 @@ llvm::Value* EvaLLM::allocateVariable(llvm::Function* fn, const std::string& nam
     const auto currentBuilder = std::make_unique<llvm::IRBuilder<>>(*_context);
     currentBuilder->SetInsertPoint(&fn->getEntryBlock(), fn->getEntryBlock().begin());
     const auto allocVar = currentBuilder->CreateAlloca(type, nullptr, name);
-    env->insert(name, allocVar);
+    env->insert(name, {allocVar, type});
     return allocVar;
 }
 
@@ -617,9 +627,11 @@ void EvaLLM::_setupGlobalEnviroment() const {
     const std::unordered_map<std::string, llvm::Value*> globals{
             {"VERSION", _builder->getInt32(1001)}};
 
-    std::unordered_map<std::string, llvm::Value*> globalVars{};
+    std::unordered_map<std::string, EvaEnvironment::TypedValue> globalVars{};
     for (auto& [name, value]: globals) {
-        globalVars[name] = _createGlobalVar(name, llvm::dyn_cast<llvm::Constant>(value));
+        EvaEnvironment::TypedValue typedValue{
+                _createGlobalVar(name, llvm::dyn_cast<llvm::Constant>(value)), value->getType()};
+        globalVars[name] = typedValue;
     }
     _globalEnv = std::make_shared<EvaEnvironment>(globalVars, nullptr);
 }

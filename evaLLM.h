@@ -33,11 +33,9 @@ private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
     llvm::Type* toType(const std::string& type, llvm::StructType* cls) const;
-    llvm::Value* handleOps(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
-                           llvm::StructType* cls) const;
+    llvm::Value* handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
-    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, Env env, llvm::Function* fn,
-                           llvm::StructType* cls) const;
+    llvm::Value* _generate(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
     std::shared_ptr<ClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr) const;
 
