@@ -4,26 +4,29 @@
 #include <llvm/IR/Value.h>
 #include <unordered_map>
 
+struct EvaValue {
+    explicit EvaValue() : value{nullptr} {}
+    explicit EvaValue(llvm::Value *value, std::string metadata = "") :
+        value{value}, metadata{std::move(metadata)} {}
+
+    llvm::Value *value;
+    std::string metadata;
+};
+inline EvaValue EvaValueNull{nullptr};
+
 class EvaEnvironment : public std::enable_shared_from_this<EvaEnvironment> {
 public:
-    struct TypedValue {
-        llvm::Value *value;
-        llvm::Type *type;
-    };
-
-    inline static TypedValue null{nullptr, nullptr};
-
-    EvaEnvironment(std::unordered_map<std::string, TypedValue> symbols,
+    EvaEnvironment(std::unordered_map<std::string, EvaValue> symbols,
                    std::shared_ptr<EvaEnvironment> parent) :
         _symbols{std::move(symbols)}, _parent{parent} {}
 
     explicit EvaEnvironment(std::shared_ptr<EvaEnvironment> parent) : _parent{parent} {}
 
-    void insert(const std::string &name, TypedValue value) { _symbols[name] = value; }
+    void insert(const std::string &name, const EvaValue &value) { _symbols[name] = value; }
 
-    TypedValue get(const std::string &name) const {
+    EvaValue get(const std::string &name) const {
         const auto env = _resolve(name);
-        return env != nullptr ? env->_symbols.at(name) : null;
+        return env != nullptr ? env->_symbols.at(name) : EvaValueNull;
     }
 
     void setClassScope(llvm::StructType *cls) { clsType = cls; }
@@ -54,7 +57,7 @@ private:
     }
 
 
-    std::unordered_map<std::string, TypedValue> _symbols;
+    std::unordered_map<std::string, EvaValue> _symbols;
     std::shared_ptr<EvaEnvironment> _parent = nullptr;
     llvm::StructType *clsType = nullptr;
     llvm::Function *fn = nullptr;
