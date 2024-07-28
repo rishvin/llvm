@@ -203,41 +203,14 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
             auto setOp = subExprList.at(0)->expString;
             if (setOp == "prop") {
                 auto instanceName = subExprList.at(1)->expString;
-                auto instance = _generate(subExprList.at(1), env);
-
-                auto [instancePtr, clsType] = [&]() -> std::pair<EvaValue, llvm::StructType*> {
-                    if (env->getClassScope() != nullptr) {
-                        return {instance, env->getClassScope()};
-                    }
-
-                    auto clsName = std::any_cast<std::string>(instance.metadata);
-                    return {instance, _classNameToDefMap.at(clsName)->underlyingStruct};
-                }();
-
-                // The instance will of actual class type, but we need to get the pointer to the
-                // class type.
-                // auto instancePtr = _builder->CreateAlloca(clsType, nullptr);
-                //_builder->CreateStore(instance, instancePtr);
-
-                // auto clsType = _classes.at(_classesTypes.at(instanceName))->cls;
-
-                auto clsDef = _classNameToDefMap.at(clsType->getStructName().data());
-                if (!clsDef) {
-                    throw std::runtime_error("Unknown class instance " + instanceName);
-                }
                 auto fieldName = subExprList.at(2)->expString;
-                if (!clsDef->fields.contains(fieldName)) {
-                    throw std::runtime_error("Unknown field: " + fieldName);
-                }
 
-                auto field = clsDef->fields.at(fieldName);
-                auto fieldIndex = field.first;
-
-                auto address = _builder->CreateStructGEP(clsType, instance.value, fieldIndex);
+                auto instance = _generate(subExprList.at(1), env);
+                auto address = _getFieldAddress(instance, fieldName);
 
                 // Use GetElementPtr to get the field.
-                auto newValue = _generate(expr->expList.at(2), env);
-                return {_builder->CreateStore(newValue.value, address)};
+                auto value = _generate(expr->expList.at(2), env);
+                return {_builder->CreateStore(*value, address)};
             }
 
             throw std::runtime_error("Unknown set operation: " + setOp);
@@ -403,10 +376,6 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         auto instanceName = "i" + clsName;
         auto instance = _builder->CreateAlloca(clsDef->underlyingStruct, nullptr, instanceName);
-        // auto clsSize = _module->getDataLayout().getTypeAllocSize(clsDef->cls);
-        // auto malloc = _module->getFunction("GC_malloc");
-        // auto instancePtr = _builder->CreateCall(malloc, _builder->getInt64(clsSize));
-        // auto instance = _builder->CreatePointerCast(instancePtr, clsDef->cls->getPointerTo());
 
         auto constructorName = clsDef->name + "_" + "__init__";
         const auto& constructor = _module->getFunction(constructorName);
@@ -426,38 +395,18 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
     // prop point x
     if (op == "prop") {
         auto clsInstanceName = expr->expList.at(1)->expString;
-        auto instance = _generate(expr->expList.at(1), env);
-
-        auto [instancePtr, clsType] = [&]() -> std::pair<EvaValue, llvm::StructType*> {
-            if (env->getClassScope() != nullptr) {
-                return {instance, env->getClassScope()};
-            }
-
-            auto clsName = std::any_cast<std::string>(instance.metadata);
-            return {instance, _classNameToDefMap.at(clsName)->underlyingStruct};
-        }();
-
-        // The instance will of actual class type, but we need to get the pointer to the class type.
-        // auto instancePtr = _builder->CreateAlloca(cls, nullptr, "ptr" + clsName);
-        // _builder->CreateStore(instance, instancePtr);
-
-        auto clsDef = _classNameToDefMap.at(clsType->getStructName().data());
-        if (!clsDef) {
-            throw std::runtime_error("Cannot find class definition for: " + clsInstanceName);
-        }
-
         auto fieldName = expr->expList.at(2)->expString;
-        if (!clsDef->fields.contains(fieldName)) {
-            throw std::runtime_error("Unknown field: " + fieldName);
-        }
 
-        auto field = clsDef->fields.at(fieldName);
-        auto fieldIndex = field.first;
+        auto instance = _generate(expr->expList.at(1), env);
+        auto address = _getFieldAddress(instance, fieldName);
 
-        auto address =
-                _builder->CreateStructGEP(clsType, instancePtr.value, fieldIndex, "p" + fieldName);
+        auto clsStrName = std::any_cast<std::string>(instance.metadata);
+        auto clsDef = _classNameToDefMap.at(clsStrName);
+
+        auto& field = clsDef->fields.at(fieldName);
+
         // Use GetElementPtr to get the field.
-        return {_builder->CreateLoad(field.second, address, "v" + fieldName)};
+        return {_builder->CreateLoad(*field, address, "v" + fieldName)};
     }
 
 
@@ -528,14 +477,13 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(const std::unique_ptr<E
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
             auto varType = extractType(*subExpr->expList.at(1), newEnv);
-            classDef->fields[varName] = std::make_pair(varIdx++, *varType);
+            classDef->fields[varName] = EvaType{*varType, varIdx++};
         }
     }
 
     std::vector<llvm::Type*> fieldsType;
-    for (const auto& [name, indexType]: classDef->fields) {
-        auto& [_, type] = indexType;
-        fieldsType.push_back(type);
+    for (const auto& [_, field]: classDef->fields) {
+        fieldsType.push_back(*field);
     }
 
     llvmStruct->setBody(fieldsType, false);
@@ -593,6 +541,25 @@ EvaValue EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const 
     }
 
     return _builder->getInt32(0);
+}
+
+llvm::Value* EvaLLM::_getFieldAddress(const EvaValue& clsInstance, std::string& fieldName) const {
+    auto clsStrName = std::any_cast<std::string>(clsInstance.metadata);
+    if (!_classNameToDefMap.contains(clsStrName)) {
+        throw std::runtime_error("Unknown class name: " + clsStrName);
+    }
+
+    auto clsDef = _classNameToDefMap.at(clsStrName);
+
+    if (!clsDef->fields.contains(fieldName)) {
+        throw std::runtime_error("Unknown field: " + fieldName + " in class: " + clsStrName);
+    }
+
+    auto& field = clsDef->fields.at(fieldName);
+    auto fieldIndex = field.metadataAsInt();
+
+    return _builder->CreateStructGEP(clsDef->underlyingStruct, *clsInstance, fieldIndex,
+                                     "p" + fieldName);
 }
 
 llvm::Value* EvaLLM::_createGlobalVar(const std::string& name, llvm::Constant* init) const {

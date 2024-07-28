@@ -19,7 +19,7 @@ public:
         llvm::StructType* parent = nullptr;
         llvm::StructType* underlyingStruct;
         std::string name;
-        std::unordered_map<std::string, std::pair<int, llvm::Type*>> fields;
+        std::unordered_map<std::string, EvaType> fields;
         std::unordered_map<std::string, llvm::Function*> methods;
     };
 
@@ -55,12 +55,13 @@ private:
     llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
                                   Env env) const;
 
+    llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName) const;
+
     void _setupExternalFunctions() const;
 
     void _saveModule(const std::string& filename) const;
 
     void _setupGlobalEnviroment() const;
-
 
     mutable std::unordered_map<std::string, std::shared_ptr<ClassDef>> _classNameToDefMap;
     mutable std::unique_ptr<llvm::LLVMContext> _context;

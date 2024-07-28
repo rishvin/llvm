@@ -18,10 +18,17 @@ struct EvaValue {
 };
 
 struct EvaType {
+    explicit EvaType() : type{nullptr} {}
     explicit EvaType(llvm::Type *type, std::any metadata = {}) :
         type{type}, metadata{std::move(metadata)} {}
 
     llvm::Type *operator*() const { return type; }
+
+    [[nodiscard]] int metadataAsInt() const { return std::any_cast<int>(metadata); }
+
+    [[nodiscard]] std::string metadataAsString() const {
+        return std::any_cast<std::string>(metadata);
+    }
 
     llvm::Type *type;
     std::any metadata;
