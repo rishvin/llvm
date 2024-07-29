@@ -501,7 +501,6 @@ EvaValue EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         case EvaExpr::ExpType::Symbol: {
             const auto symbol = env->get(expr->expString);
-
             if (const auto localVar = llvm::dyn_cast<llvm::AllocaInst>(*symbol)) {
                 if (localVar->getAllocatedType()->isStructTy()) {
                     // Just return the pointer to the struct if the symbol is a struct and is

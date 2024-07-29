@@ -87,9 +87,15 @@
             )
       )
    )
+   (def handle ((p Point))
+        (
+            (set (prop p x) 310)
+        )
+    )
     (var (p Point) (new Point (10, 20)))
     (set (prop p x) 40)
+    (handle p)
     (print "Point x = %d\n" (prop p x))
-     (print "Point y = %d\n" (prop p y))
+    (print "Point y = %d\n" (prop p y))
 )
 
