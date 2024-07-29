@@ -339,8 +339,9 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         for (auto i = 0; i < params.size(); i++) {
             auto arg = currentFn->getArg(i);
             arg->setName(params.names[i]);
-            auto varBinding = allocateVariable(currentFn, params.names[i], params.types[i], fnEnv);
-            _builder->CreateStore(arg, varBinding);
+
+            // Insert the function arguments into the environment.
+            fnEnv->insert(params.names[i], {arg, params.types[i].metadata});
         }
 
         auto retValue = _generate(body, fnEnv);
@@ -501,6 +502,7 @@ EvaValue EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         case EvaExpr::ExpType::Symbol: {
             const auto symbol = env->get(expr->expString);
+
             if (const auto localVar = llvm::dyn_cast<llvm::AllocaInst>(*symbol)) {
                 if (localVar->getAllocatedType()->isStructTy()) {
                     // Just return the pointer to the struct if the symbol is a struct and is
@@ -519,11 +521,17 @@ EvaValue EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                         symbol.metadata};
             }
 
-            if (const auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(symbol.value)) {
+            if (const auto globalVar = llvm::dyn_cast<llvm::GlobalVariable>(*symbol)) {
                 return {_builder->CreateLoad(globalVar->getInitializer()->getType(), globalVar,
                                              symbol.value->getName()),
                         symbol.metadata};
             }
+
+            // These are the values passed directly to the function.
+            if (const auto argVar = llvm::dyn_cast<llvm::Argument>(*symbol)) {
+                return {argVar, symbol.metadata};
+            }
+
             return _builder->getInt32(0);
         }
         case EvaExpr::ExpType::List: {
