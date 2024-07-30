@@ -9,21 +9,54 @@
 
 using Env = std::shared_ptr<EvaEnvironment>;
 
-class EvaLLM {
+class EvaLLVM {
 public:
     struct ClassDef : std::enable_shared_from_this<ClassDef> {
-        ClassDef(const std::string& name, llvm::LLVMContext& context) : name{name} {
-            underlyingStruct = llvm::StructType::create(context, name);
+        ClassDef(const std::string& name, llvm::LLVMContext& context, llvm::IRBuilder<>& builder) :
+            name{name} {
+            _header = llvm::StructType::create(context, {builder.getInt8Ty()->getPointerTo()},
+                                               name + "_header"),
+            _struct = llvm::StructType::create(context, name);
         }
 
-        llvm::StructType* parent = nullptr;
-        llvm::StructType* underlyingStruct;
+        llvm::StructType* getStruct() const { return _struct; }
+
+        void setFields(const std::vector<std::pair<std::string, llvm::Type*>>& fields) {
+            std::vector<llvm::Type*> structFieldTypes{_header};
+
+            for (int idx = 0; idx < fields.size(); ++idx) {
+                auto& [fieldName, fieldType] = fields[idx];
+                _fields[fieldName] = EvaType{fieldType, idx + 1};
+                structFieldTypes.push_back(fieldType);
+            }
+
+            _struct->setBody(structFieldTypes, false);
+        }
+
+        const EvaType& getField(const std::string& fieldName) const {
+            return _fields.at(fieldName);
+        }
+
+        llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
+                                     const std::string& fieldName) const {
+            if (!hasField(fieldName)) {
+                throw std::runtime_error("Unknown field: " + fieldName + " in class: " + name);
+            }
+
+            auto& field = getField(fieldName);
+            return builder.CreateStructGEP(_struct, ptr, field.metadataAsInt(), "f_" + fieldName);
+        }
+
+        bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
+
+        llvm::StructType* _header = nullptr;
+        llvm::StructType* _struct = nullptr;
         std::string name;
-        std::unordered_map<std::string, EvaType> fields;
+        std::unordered_map<std::string, EvaType> _fields;
         std::unordered_map<std::string, llvm::Function*> methods;
     };
 
-    explicit EvaLLM();
+    explicit EvaLLVM();
 
     void exec(const std::string& program, const std::string& outputFilename) const;
 
