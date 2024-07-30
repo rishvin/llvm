@@ -108,7 +108,7 @@ void EvaLLM::_compile(std::unique_ptr<EvaExpr> expr) const {
     verifyFunction(*mainFn);
 }
 
-EvaType EvaLLM::extractType(const EvaExpr& expr, Env env) const {
+EvaType EvaLLM::_extractType(const EvaExpr& expr, Env env) const {
     auto toType = [&](const std::string& strType) {
         // The `self` keyword is used to refer to the current class instance.
         if (strType == "self") {
@@ -146,7 +146,7 @@ EvaType EvaLLM::extractType(const EvaExpr& expr, Env env) const {
     return toType(expr.expString);
 }
 
-EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const {
+EvaValue EvaLLM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const {
     auto op = expr->expList.front()->expString;
 
     if (op == "print") {
@@ -173,7 +173,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
 
         // This cls parameter is used to handle the self keyword when someone creates a variable
         // inside the struct body.
-        const auto type = extractType(*expr->expList.at(1), env);
+        const auto type = _extractType(*expr->expList.at(1), env);
 
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
@@ -285,8 +285,8 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                                         expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
-        auto returnType = hasReturnType ? extractType(*expr->expList.at(4), env)
-                                        : extractType(EvaExpr{"number"}, env);
+        auto returnType = hasReturnType ? _extractType(*expr->expList.at(4), env)
+                                        : _extractType(EvaExpr{"number"}, env);
 
         auto& body = hasReturnType ? expr->expList.at(5) : expr->expList.at(3);
 
@@ -306,7 +306,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
             if (subExpr->expType == EvaExpr::ExpType::List) {
                 for (auto i = 0; i < subExpr->expList.size(); i++) {
                     auto name = extractName(subExpr->expList.at(i));
-                    auto type = extractType(*subExpr->expList.at(i), env);
+                    auto type = _extractType(*subExpr->expList.at(i), env);
                     auto& metadata = name;
 
                     params.names.push_back(name);
@@ -314,7 +314,7 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
                 }
             } else {
                 auto name = extractName(subExpr);
-                auto type = extractType(*subExpr, env);
+                auto type = _extractType(*subExpr, env);
                 auto& metadata = name;
 
                 params.names.push_back(name);
@@ -442,18 +442,50 @@ EvaValue EvaLLM::handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         BINARY_OP(CreateICmpSGE, "ge");
     }
 
-    // Handler for function calls.
-    const auto& callable = _module->getFunction(op);
+    // (method p str)
+    // (method p setX 50)
+    if (op == "method") {
+        auto& clsInstanceName = expr->expList.at(1)->expString;
+        auto& methodName = expr->expList.at(2)->expString;
+
+        auto clsInstance = env->get(clsInstanceName);
+        if (clsInstance.isNull()) {
+            throw std::runtime_error("Unknown class instance: " + clsInstanceName);
+        }
+
+        auto clsName = std::any_cast<std::string>(clsInstance.metadata);
+        auto resolvedMethodName = clsName + "_" + methodName;
+
+        std::vector<std::unique_ptr<EvaExpr>> fnCallExprList{};
+        fnCallExprList.push_back(std::make_unique<EvaExpr>(resolvedMethodName));
+        fnCallExprList.push_back(std::make_unique<EvaExpr>(clsInstanceName));
+
+        for (auto i = 3; i < expr->expList.size(); i++) {
+            fnCallExprList.push_back(std::move(expr->expList.at(i)));
+        }
+
+        return _handleOps(std::make_unique<EvaExpr>(std::move(fnCallExprList)), env);
+    }
+
+    // Function calls.
+    // (add 10 20)
+    return _handleFunctionCall(op, *expr, env);
+}
+
+EvaValue EvaLLM::_handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr,
+                                     Env env) const {
+    const auto& callable = _module->getFunction(fnName);
     if (!callable) {
-        throw std::runtime_error("Unknown callable: " + op);
+        throw std::runtime_error("Unknown funcation: " + fnName);
     }
 
     std::vector<llvm::Value*> args{};
-    for (auto i = 1; i < expr->expList.size(); i++) {
-        auto& subExpr = expr->expList.at(i);
+    for (auto i = 1; i < argsExpr.expList.size(); i++) {
+        auto& subExpr = argsExpr.expList.at(i);
         auto arg = _generate(subExpr, env);
-        args.push_back(arg.value);
+        args.push_back(*arg);
     }
+
     return {_builder->CreateCall(callable, args)};
 }
 
@@ -477,7 +509,7 @@ std::shared_ptr<EvaLLM::ClassDef> EvaLLM::_buildClassDef(const std::unique_ptr<E
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
-            auto varType = extractType(*subExpr->expList.at(1), newEnv);
+            auto varType = _extractType(*subExpr->expList.at(1), newEnv);
             classDef->fields[varName] = EvaType{*varType, varIdx++};
         }
     }
@@ -537,7 +569,7 @@ EvaValue EvaLLM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const 
         case EvaExpr::ExpType::List: {
             if (const auto& subExpr = expr->expList.front();
                 subExpr->expType == EvaExpr::ExpType::Symbol) {
-                return handleOps(expr, env);
+                return _handleOps(expr, env);
             }
 
             for (const auto& subExpr: expr->expList) {

@@ -11,6 +11,8 @@ struct EvaValue {
     EvaValue(llvm::Value *value, std::any metadata = {}) :
         value{value}, metadata{std::move(metadata)} {}
 
+    [[nodiscard]] bool isNull() const { return value == nullptr; }
+
     llvm::Value *operator*() const { return value; }
 
     llvm::Value *value;

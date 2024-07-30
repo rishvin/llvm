@@ -32,9 +32,9 @@ public:
 private:
     void _compile(std::unique_ptr<EvaExpr> expr) const;
 
-    EvaType extractType(const EvaExpr& expr, Env env) const;
+    EvaType _extractType(const EvaExpr& expr, Env env) const;
 
-    EvaValue handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const;
+    EvaValue _handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
     EvaValue _generate(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
@@ -56,6 +56,9 @@ private:
                                   Env env) const;
 
     llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName) const;
+
+    EvaValue _handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr, Env env) const;
+
 
     void _setupExternalFunctions() const;
 
