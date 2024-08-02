@@ -20,9 +20,9 @@ public:
         return env != nullptr ? env->_symbols.at(name) : EvaValueNull;
     }
 
-    void setClassScope(EvaClassDef *cls) { _scopedClass = cls; }
+    void setClassScope(MutableEvaClassDef *cls) { _scopedClass = cls; }
 
-    EvaClassDef *getClassScope() const {
+    MutableEvaClassDef *getClassScope() const {
         if (_scopedClass != nullptr) {
             return _scopedClass;
         }
@@ -49,6 +49,6 @@ private:
 
     std::unordered_map<std::string, EvaValue> _symbols;
     std::shared_ptr<EvaEnvironment> _parent = nullptr;
-    EvaClassDef *_scopedClass = nullptr;
+    MutableEvaClassDef *_scopedClass = nullptr;
     llvm::Function *fn = nullptr;
 };

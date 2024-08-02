@@ -3,6 +3,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Type.h>
 #include <unordered_map>
+#include <utility>
 
 template<typename VType>
 struct AbstractEvaValue {
@@ -54,14 +55,53 @@ struct EvaType {
     std::any metadata;
 };
 
+class ImmutableEvaClassDef : std::enable_shared_from_this<ImmutableEvaClassDef> {
+public:
+    ImmutableEvaClassDef() = default;
 
-struct EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
-    EvaClassDef(const std::string& name, llvm::LLVMContext& context) : name{name} {
+    ImmutableEvaClassDef(std::string& name, llvm::StructType* structType,
+                         llvm::StructType* vTableType,
+                         std::unordered_map<std::string, EvaType> fields,
+                         std::unordered_map<std::string, EvaConstant> methods) :
+        _name{std::move(name)}, _struct{structType}, _vTable{vTableType},
+        _fields{std::move(fields)}, _methods{std::move(methods)} {}
+
+    [[nodiscard]] std::string getName() const { return _name; }
+
+    llvm::StructType* getStruct() const { return _struct; }
+
+    const EvaType& getField(const std::string& fieldName) const { return _fields.at(fieldName); }
+
+    bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
+
+    llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
+                                 const std::string& fieldName) const {
+        if (!hasField(fieldName)) {
+            throw std::runtime_error("Unknown field: " + fieldName + " in class: " + _name);
+        }
+
+        auto& field = getField(fieldName);
+        return builder.CreateStructGEP(_struct, ptr, field.metadataAsInt(), "f_" + fieldName);
+    }
+
+protected:
+    std::string _name;
+
+    llvm::StructType* _struct = nullptr;
+    llvm::StructType* _vTable = nullptr;
+
+    std::unordered_map<std::string, EvaType> _fields;
+    std::unordered_map<std::string, EvaConstant> _methods;
+};
+
+class MutableEvaClassDef : public ImmutableEvaClassDef {
+public:
+    MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context) :
+        ImmutableEvaClassDef{} {
+        _name = name;
         _struct = llvm::StructType::create(context, name);
         _vTable = llvm::StructType::create(context, "vtable_" + name);
     }
-
-    llvm::StructType* getStruct() const { return _struct; }
 
     void setField(const std::string& fieldName, llvm::Type* field) {
         constexpr int fieldStartIdx = 1;
@@ -69,26 +109,12 @@ struct EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
         _fields[fieldName] = EvaType{field, idx};
     }
 
-    const EvaType& getField(const std::string& fieldName) const { return _fields.at(fieldName); }
-
-    llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
-                                 const std::string& fieldName) const {
-        if (!hasField(fieldName)) {
-            throw std::runtime_error("Unknown field: " + fieldName + " in class: " + name);
-        }
-
-        auto& field = getField(fieldName);
-        return builder.CreateStructGEP(_struct, ptr, field.metadataAsInt(), "f_" + fieldName);
-    }
-
-    bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
-
     void setMethod(const std::string& methodName, llvm::Function* method) {
         int idx = _methods.size();
         _methods[methodName] = EvaConstant{method, idx};
     }
 
-    void finalize(llvm::Module& module) {
+    std::shared_ptr<ImmutableEvaClassDef> toImmutable(llvm::Module& module) {
         std::vector<llvm::Type*> vTableFields{};
         for (auto& [_, method]: _methods) {
             vTableFields.push_back((*method)->getType());
@@ -112,11 +138,7 @@ struct EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
         auto init = llvm::ConstantStruct::get(_vTable, vTableValues);
         variable->setInitializer(init);
         variable->setAlignment(llvm::MaybeAlign(4));
-    }
 
-    llvm::StructType* _vTable = nullptr;
-    llvm::StructType* _struct = nullptr;
-    std::string name;
-    std::unordered_map<std::string, EvaType> _fields;
-    std::unordered_map<std::string, EvaConstant> _methods;
+        return std::make_shared<ImmutableEvaClassDef>(_name, _struct, _vTable, _fields, _methods);
+    }
 };

@@ -28,8 +28,8 @@ private:
 
     EvaValue _generate(const std::unique_ptr<EvaExpr>& expr, Env env) const;
 
-    std::shared_ptr<EvaClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr,
-                                                Env env) const;
+    std::shared_ptr<MutableEvaClassDef> _buildClassDef(const std::unique_ptr<EvaExpr>& expr,
+                                                       Env env) const;
 
     llvm::Value* _createGlobalVar(const std::string& name, llvm::Constant* init) const;
 
@@ -46,7 +46,10 @@ private:
     llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
                                   Env env) const;
 
-    llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName) const;
+    llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName,
+                                  Env env) const;
+
+    ImmutableEvaClassDef* _resolveClass(const std::string& className, Env env) const;
 
     EvaValue _handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr, Env env) const;
 
@@ -57,7 +60,8 @@ private:
 
     void _setupGlobalEnviroment() const;
 
-    mutable std::unordered_map<std::string, std::shared_ptr<EvaClassDef>> _classNameToDefMap;
+    mutable std::unordered_map<std::string, std::shared_ptr<ImmutableEvaClassDef>>
+            _classNameToDefMap;
     mutable std::unique_ptr<llvm::LLVMContext> _context;
     mutable std::unique_ptr<llvm::Module> _module;
     mutable std::unique_ptr<llvm::IRBuilder<>> _builder;

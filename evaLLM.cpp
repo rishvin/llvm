@@ -1,6 +1,7 @@
-#include "evaLLM.h"
 #include <fstream>
 #include <sstream>
+
+#include "evaLLM.h"
 #include "evaParser.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -129,9 +130,8 @@ EvaType EvaLLVM::_extractType(const EvaExpr& expr, Env env) const {
         }
 
         // Case when the type is a class name.
-        if (_classNameToDefMap.contains(strType)) {
-            auto clsDef = _classNameToDefMap.at(strType);
-            return EvaType{clsDef->getStruct()->getPointerTo(), clsDef->name};
+        if (auto clsDef = _resolveClass(strType, env)) {
+            return EvaType{clsDef->getStruct()->getPointerTo(), clsDef->getName()};
         }
 
         return EvaType{_builder->getInt32Ty(), "int32"};
@@ -207,7 +207,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
                 auto fieldName = subExprList.at(2)->expString;
 
                 auto instance = _generate(subExprList.at(1), env);
-                auto address = _getFieldAddress(instance, fieldName);
+                auto address = _getFieldAddress(instance, fieldName, env);
 
                 // Use GetElementPtr to get the field.
                 auto value = _generate(expr->expList.at(2), env);
@@ -371,14 +371,16 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
 
         auto result = _generate(expr->expList.at(3), newEnv);
 
-        clsDef->finalize(*_module);
+        auto immutableClsDef = clsDef->toImmutable(*_module);
+        _classNameToDefMap[immutableClsDef->getName()] = std::move(immutableClsDef);
+
         return result;
     }
 
     // (var point (new Point (10 20)))
     if (op == "new") {
         auto clsName = expr->expList.at(1)->expString;
-        auto clsDef = _classNameToDefMap.at(clsName);
+        auto clsDef = _resolveClass(clsName, env);
         if (!clsDef) {
             throw std::runtime_error("Unknown class: " + clsName);
         }
@@ -386,7 +388,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto instanceName = "i" + clsName;
         auto instance = _builder->CreateAlloca(clsDef->getStruct(), nullptr, instanceName);
 
-        auto constructorName = clsDef->name + "_" + "__init__";
+        auto constructorName = clsDef->getName() + "_" + "__init__";
         const auto& constructor = _module->getFunction(constructorName);
         if (!constructor) {
             throw std::runtime_error("Cannot find constructor for class : " + clsName);
@@ -407,10 +409,10 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto fieldName = expr->expList.at(2)->expString;
 
         auto instance = _generate(expr->expList.at(1), env);
-        auto address = _getFieldAddress(instance, fieldName);
+        auto address = _getFieldAddress(instance, fieldName, env);
 
         auto clsStrName = std::any_cast<std::string>(instance.metadata);
-        auto clsDef = _classNameToDefMap.at(clsStrName);
+        auto clsDef = _resolveClass(clsStrName, env);
 
         auto& field = clsDef->getField(fieldName);
 
@@ -497,8 +499,8 @@ EvaValue EvaLLVM::_handleFunctionCall(const std::string& fnName, const EvaExpr& 
     return {_builder->CreateCall(callable, args)};
 }
 
-std::shared_ptr<EvaClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaExpr>& expr,
-                                                     Env env) const {
+std::shared_ptr<MutableEvaClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaExpr>& expr,
+                                                            Env env) const {
     auto clsName = expr->expList.at(1)->expString;
     auto parentCls = expr->expList.at(2)->expString;
 
@@ -506,8 +508,7 @@ std::shared_ptr<EvaClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaEx
         throw std::runtime_error("Duplicate class definition: " + clsName);
     }
 
-    _classNameToDefMap[clsName] = std::make_shared<EvaClassDef>(clsName, *_context);
-    auto classDef = _classNameToDefMap[clsName];
+    auto classDef = std::make_shared<MutableEvaClassDef>(clsName, *_context);
 
     auto newEnv = std::make_shared<EvaEnvironment>(env);
     newEnv->setClassScope(classDef.get());
@@ -538,8 +539,7 @@ EvaValue EvaLLVM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const
                 if (localVar->getAllocatedType()->isStructTy()) {
                     // Just return the pointer to the struct if the symbol is a struct and is
                     // already present in the _classes mao.
-                    if (_classNameToDefMap.contains(
-                                localVar->getAllocatedType()->getStructName().data())) {
+                    if (_resolveClass(localVar->getAllocatedType()->getStructName().str(), env)) {
                         return {localVar, symbol.metadata};
                     }
 
@@ -581,13 +581,27 @@ EvaValue EvaLLVM::_generate(const std::unique_ptr<EvaExpr>& expr, Env env) const
     return _builder->getInt32(0);
 }
 
-llvm::Value* EvaLLVM::_getFieldAddress(const EvaValue& clsInstance, std::string& fieldName) const {
+llvm::Value* EvaLLVM::_getFieldAddress(const EvaValue& clsInstance, std::string& fieldName,
+                                       Env env) const {
     auto clsStrName = std::any_cast<std::string>(clsInstance.metadata);
-    if (!_classNameToDefMap.contains(clsStrName)) {
-        throw std::runtime_error("Unknown class name: " + clsStrName);
+
+    auto cls = _resolveClass(clsStrName, env);
+    if (!cls) {
+        throw std::runtime_error("Unknown class: " + clsStrName);
+    }
+    return cls->getFieldAddress(*_builder, *clsInstance, fieldName);
+}
+
+ImmutableEvaClassDef* EvaLLVM::_resolveClass(const std::string& clsName, Env env) const {
+    if (_classNameToDefMap.contains(clsName)) {
+        return _classNameToDefMap.at(clsName).get();
     }
 
-    return _classNameToDefMap.at(clsStrName)->getFieldAddress(*_builder, *clsInstance, fieldName);
+    if (env->getClassScope() != nullptr && env->getClassScope()->getName() == clsName) {
+        return env->getClassScope();
+    }
+
+    return nullptr;
 }
 
 llvm::Value* EvaLLVM::_createGlobalVar(const std::string& name, llvm::Constant* init) const {
