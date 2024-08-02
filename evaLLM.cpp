@@ -116,7 +116,8 @@ EvaType EvaLLVM::_extractType(const EvaExpr& expr, Env env) const {
             if (!scopedCls) {
                 throw std::runtime_error("self is not allowed here");
             }
-            return EvaType{scopedCls->getPointerTo(), scopedCls->getName().str()};
+            return EvaType{scopedCls->getStruct()->getPointerTo(),
+                           scopedCls->getStruct()->getName().str()};
         }
 
         if (strType == "number") {
@@ -281,7 +282,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         // (def something ((x number) (y number)) -> number (+ x y))
         auto fnName = env->getClassScope() == nullptr
                               ? expr->expList.at(1)->expString
-                              : env->getClassScope()->getName().str() + "_" +
+                              : env->getClassScope()->getStruct()->getName().str() + "_" +
                                         expr->expList.at(1)->expString;
         auto hasReturnType = expr->expList.size() > 4;
 
@@ -333,6 +334,10 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto currentFn =
                 _createFunction(fnName, llvm::FunctionType::get(*returnType, fnTypes, false), env);
 
+        if (env->getClassScope() != nullptr) {
+            env->getClassScope()->setMethod(fnName, currentFn);
+        }
+
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
         fnEnv->setFunctionScope(currentFn);
 
@@ -362,11 +367,11 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
 
         // Set the class scope to the current class definition and generate the class body.
         auto newEnv = std::make_shared<EvaEnvironment>(env);
-        newEnv->setClassScope(clsDef->getStruct());
+        newEnv->setClassScope(clsDef.get());
 
         auto result = _generate(expr->expList.at(3), newEnv);
 
-        clsDef->finalize();
+        clsDef->finalize(*_module);
         return result;
     }
 
@@ -492,8 +497,8 @@ EvaValue EvaLLVM::_handleFunctionCall(const std::string& fnName, const EvaExpr& 
     return {_builder->CreateCall(callable, args)};
 }
 
-std::shared_ptr<EvaLLVM::ClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaExpr>& expr,
-                                                           Env env) const {
+std::shared_ptr<EvaClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaExpr>& expr,
+                                                     Env env) const {
     auto clsName = expr->expList.at(1)->expString;
     auto parentCls = expr->expList.at(2)->expString;
 
@@ -501,12 +506,11 @@ std::shared_ptr<EvaLLVM::ClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr
         throw std::runtime_error("Duplicate class definition: " + clsName);
     }
 
-    _classNameToDefMap[clsName] = std::make_shared<ClassDef>(clsName, *_context);
+    _classNameToDefMap[clsName] = std::make_shared<EvaClassDef>(clsName, *_context);
     auto classDef = _classNameToDefMap[clsName];
-    auto llvmStruct = classDef->getStruct();
 
     auto newEnv = std::make_shared<EvaEnvironment>(env);
-    newEnv->setClassScope(llvmStruct);
+    newEnv->setClassScope(classDef.get());
 
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {

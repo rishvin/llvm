@@ -1,42 +1,9 @@
 #pragma once
 
 #include <any>
-#include <llvm/IR/DerivedTypes.h>
-#include <llvm/IR/Value.h>
 #include <unordered_map>
-#include <utility>
 
-struct EvaValue {
-    explicit EvaValue() : value{nullptr} {}
-    EvaValue(llvm::Value *value, std::any metadata = {}) :
-        value{value}, metadata{std::move(metadata)} {}
-
-    [[nodiscard]] bool isNull() const { return value == nullptr; }
-
-    llvm::Value *operator*() const { return value; }
-
-    llvm::Value *value;
-    std::any metadata;
-};
-
-struct EvaType {
-    explicit EvaType() : type{nullptr} {}
-    explicit EvaType(llvm::Type *type, std::any metadata = {}) :
-        type{type}, metadata{std::move(metadata)} {}
-
-    llvm::Type *operator*() const { return type; }
-
-    [[nodiscard]] int metadataAsInt() const { return std::any_cast<int>(metadata); }
-
-    [[nodiscard]] std::string metadataAsString() const {
-        return std::any_cast<std::string>(metadata);
-    }
-
-    llvm::Type *type;
-    std::any metadata;
-};
-
-inline EvaValue EvaValueNull{nullptr};
+#include "evaUtilities.h"
 
 class EvaEnvironment : public std::enable_shared_from_this<EvaEnvironment> {
 public:
@@ -53,11 +20,11 @@ public:
         return env != nullptr ? env->_symbols.at(name) : EvaValueNull;
     }
 
-    void setClassScope(llvm::StructType *cls) { clsType = cls; }
+    void setClassScope(EvaClassDef *cls) { _scopedClass = cls; }
 
-    llvm::StructType *getClassScope() const {
-        if (clsType != nullptr) {
-            return clsType;
+    EvaClassDef *getClassScope() const {
+        if (_scopedClass != nullptr) {
+            return _scopedClass;
         }
         return _parent != nullptr ? _parent->getClassScope() : nullptr;
     }
@@ -80,9 +47,8 @@ private:
         return _parent != nullptr ? _parent->_resolve(name) : nullptr;
     }
 
-
     std::unordered_map<std::string, EvaValue> _symbols;
     std::shared_ptr<EvaEnvironment> _parent = nullptr;
-    llvm::StructType *clsType = nullptr;
+    EvaClassDef *_scopedClass = nullptr;
     llvm::Function *fn = nullptr;
 };
