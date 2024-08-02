@@ -364,7 +364,10 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto newEnv = std::make_shared<EvaEnvironment>(env);
         newEnv->setClassScope(clsDef->getStruct());
 
-        return _generate(expr->expList.at(3), newEnv);
+        auto result = _generate(expr->expList.at(3), newEnv);
+
+        clsDef->finalize();
+        return result;
     }
 
     // (var point (new Point (10 20)))
@@ -498,23 +501,20 @@ std::shared_ptr<EvaLLVM::ClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr
         throw std::runtime_error("Duplicate class definition: " + clsName);
     }
 
-    _classNameToDefMap[clsName] = std::make_shared<ClassDef>(clsName, *_context, *_builder);
+    _classNameToDefMap[clsName] = std::make_shared<ClassDef>(clsName, *_context);
     auto classDef = _classNameToDefMap[clsName];
     auto llvmStruct = classDef->getStruct();
 
     auto newEnv = std::make_shared<EvaEnvironment>(env);
     newEnv->setClassScope(llvmStruct);
 
-    std::vector<std::pair<std::string, llvm::Type*>> fields;
     for (auto& subExpr: expr->expList.at(3)->expList) {
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
             auto varType = _extractType(*subExpr->expList.at(1), newEnv);
-            fields.emplace_back(varName, *varType);
+            classDef->setField(varName, *varType);
         }
     }
-
-    classDef->setFields(fields);
 
     return classDef;
 }

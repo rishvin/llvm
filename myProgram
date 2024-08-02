@@ -101,7 +101,7 @@
     (set (prop p x) 40)
     (handle p)
     (method p str)
-    (method p setX 500)
+    (method p setX 600)
     (print "Point x = %d\n" (prop p x))
     (print "Point y = %d\n" (prop p y))
 )

@@ -12,25 +12,17 @@ using Env = std::shared_ptr<EvaEnvironment>;
 class EvaLLVM {
 public:
     struct ClassDef : std::enable_shared_from_this<ClassDef> {
-        ClassDef(const std::string& name, llvm::LLVMContext& context, llvm::IRBuilder<>& builder) :
-            name{name} {
-            _header = llvm::StructType::create(context, {builder.getInt8Ty()->getPointerTo()},
-                                               name + "_header"),
+        ClassDef(const std::string& name, llvm::LLVMContext& context) : name{name} {
             _struct = llvm::StructType::create(context, name);
+            _vTable = llvm::StructType::create(context, "vtable_" + name);
         }
 
         llvm::StructType* getStruct() const { return _struct; }
 
-        void setFields(const std::vector<std::pair<std::string, llvm::Type*>>& fields) {
-            std::vector<llvm::Type*> structFieldTypes{_header};
-
-            for (int idx = 0; idx < fields.size(); ++idx) {
-                auto& [fieldName, fieldType] = fields[idx];
-                _fields[fieldName] = EvaType{fieldType, idx + 1};
-                structFieldTypes.push_back(fieldType);
-            }
-
-            _struct->setBody(structFieldTypes, false);
+        void setField(const std::string& fieldName, llvm::Type* field) {
+            constexpr int fieldStartIdx = 1;
+            int idx = _fields.size() + fieldStartIdx;
+            _fields[fieldName] = EvaType{field, idx};
         }
 
         const EvaType& getField(const std::string& fieldName) const {
@@ -49,11 +41,30 @@ public:
 
         bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
 
-        llvm::StructType* _header = nullptr;
+        void setMethod(const std::string& methodName, llvm::Function* method) {
+            int idx = _methods.size();
+            _methods[methodName] = EvaValue{method, idx};
+        }
+
+        void finalize() {
+            std::vector<llvm::Type*> vTableFields{};
+            for (auto& [_, method]: _methods) {
+                vTableFields.push_back((*method)->getType());
+            }
+            _vTable->setBody(vTableFields);
+
+            std::vector<llvm::Type*> structFields{_vTable};
+            for (auto& [_, type]: _fields) {
+                structFields.push_back(*type);
+            }
+            _struct->setBody(structFields);
+        }
+
+        llvm::StructType* _vTable = nullptr;
         llvm::StructType* _struct = nullptr;
         std::string name;
         std::unordered_map<std::string, EvaType> _fields;
-        std::unordered_map<std::string, llvm::Function*> methods;
+        std::unordered_map<std::string, EvaValue> _methods;
     };
 
     explicit EvaLLVM();
