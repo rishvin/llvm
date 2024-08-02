@@ -104,5 +104,33 @@
     (method p setX 600)
     (print "Point x = %d\n" (prop p x))
     (print "Point y = %d\n" (prop p y))
+
+
+    (class DerivedPoint Point
+                (
+                    (var z 0)
+                    (def __init__ (self z)
+                        (
+                            (set (prop self z) z)
+                        )
+                    )
+
+                    (def str (self)
+                        (
+                                     (print "Point z = %d\n" (prop self z))
+                        )
+                    )
+              )
+           )
+
+           // Derived class operations.
+           (var (dp DerivedPoint) (new DerivedPoint (100, 200)))
+           (set (prop dp x) 60)
+           (handle dp)
+           (method dp str)
+           (method dp setX 700)
+           (print "Derived Point x = %d\n" (prop dp x))
+           (print "Derived Point y = %d\n" (prop dp y))
+           (print "Derived Point z = %d\n" (prop dp z))
 )
 

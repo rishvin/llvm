@@ -84,6 +84,10 @@ public:
         return builder.CreateStructGEP(_struct, ptr, field.metadataAsInt(), "f_" + fieldName);
     }
 
+    auto& getFields() const { return _fields; }
+
+    auto& getMethods() const { return _methods; }
+
 protected:
     std::string _name;
 
@@ -96,11 +100,17 @@ protected:
 
 class MutableEvaClassDef : public ImmutableEvaClassDef {
 public:
-    MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context) :
+    MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context,
+                       std::shared_ptr<ImmutableEvaClassDef> parent = nullptr) :
         ImmutableEvaClassDef{} {
         _name = name;
         _struct = llvm::StructType::create(context, name);
         _vTable = llvm::StructType::create(context, "vtable_" + name);
+
+        if (parent) {
+            _fields.insert(parent->getFields().begin(), parent->getFields().end());
+            _methods.insert(parent->getMethods().begin(), parent->getMethods().end());
+        }
     }
 
     void setField(const std::string& fieldName, llvm::Type* field) {

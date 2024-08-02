@@ -502,13 +502,21 @@ EvaValue EvaLLVM::_handleFunctionCall(const std::string& fnName, const EvaExpr& 
 std::shared_ptr<MutableEvaClassDef> EvaLLVM::_buildClassDef(const std::unique_ptr<EvaExpr>& expr,
                                                             Env env) const {
     auto clsName = expr->expList.at(1)->expString;
-    auto parentCls = expr->expList.at(2)->expString;
+    auto parentClsName = expr->expList.at(2)->expString;
 
     if (_classNameToDefMap.contains(clsName)) {
         throw std::runtime_error("Duplicate class definition: " + clsName);
     }
 
-    auto classDef = std::make_shared<MutableEvaClassDef>(clsName, *_context);
+    std::shared_ptr<ImmutableEvaClassDef> parentClsDef = nullptr;
+    if (!parentClsName.empty()) {
+        if (!_classNameToDefMap.contains(parentClsName)) {
+            throw std::runtime_error("Unknown parent class: " + parentClsName);
+        }
+        parentClsDef = _classNameToDefMap.at(parentClsName);
+    }
+
+    auto classDef = std::make_shared<MutableEvaClassDef>(clsName, *_context, parentClsDef);
 
     auto newEnv = std::make_shared<EvaEnvironment>(env);
     newEnv->setClassScope(classDef.get());
