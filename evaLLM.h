@@ -46,7 +46,7 @@ private:
     llvm::Value* _allocateStackVariable(llvm::Function* fn, const std::string& name, EvaType type,
                                         Env env) const;
 
-    llvm::Value* _allocateHeapVariable(const std::string& name, EvaType type, Env env) const;
+    EvaValue _allocateHeapVariable(const std::string& name, EvaType type, Env env) const;
 
     llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName,
                                   Env env) const;
@@ -55,7 +55,8 @@ private:
 
     EvaValue _handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr, Env env) const;
 
-    EvaValue _allocateAndInitClass(const std::string& clsName, EvaExpr& initArgs, Env env) const;
+    void _initClass(const EvaValue& clsInstance, const EvaClassDef& clsDef, const EvaExpr& initArgs,
+                    Env env) const;
 
 
     void _setupExternalFunctions() const;

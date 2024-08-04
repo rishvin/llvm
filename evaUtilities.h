@@ -12,8 +12,6 @@ struct EvaType {
 
     explicit EvaType(llvm::Type* type, size_t index) : _type{type}, _index{index} {}
 
-    [[nodiscard]] bool isInvalid() const { return _type == nullptr; }
-
     llvm::Type* operator*() const { return _type; }
 
     [[nodiscard]] size_t index() const {
@@ -34,21 +32,6 @@ private:
     llvm::Type* _type;
     std::optional<std::string> _actualType = std::nullopt;
     std::optional<size_t> _index = std::nullopt;
-};
-
-template<typename VType>
-struct AbstractEvaValue {
-    explicit AbstractEvaValue(VType value, std::any metadata) :
-        value{value}, metadata{std::move(metadata)} {}
-
-    virtual ~AbstractEvaValue() = default;
-
-    [[nodiscard]] virtual bool isNull() const = 0;
-
-    virtual VType operator*() const { return value; }
-
-    VType value;
-    std::any metadata;
 };
 
 struct EvaValue {
@@ -75,12 +58,18 @@ private:
 
 static inline EvaValue EvaValueNull{};
 
-struct EvaConstant final : AbstractEvaValue<llvm::Constant*> {
-    explicit EvaConstant() : AbstractEvaValue{nullptr, {}} {}
-    EvaConstant(llvm::Constant* value, std::any metadata) :
-        AbstractEvaValue{value, std::move(metadata)} {}
+struct EvaMethod {
+    explicit EvaMethod() : _method{nullptr} {}
 
-    [[nodiscard]] bool isNull() const override { return value == nullptr; }
+    explicit EvaMethod(llvm::Function* method, size_t index) : _method{method}, _index{index} {}
+
+    [[nodiscard]] llvm::Function* operator*() const { return _method; }
+
+    [[nodiscard]] size_t index() const { return _index; }
+
+private:
+    llvm::Function* _method;
+    size_t _index = 0;
 };
 
 
@@ -98,20 +87,14 @@ public:
 
     llvm::StructType* getStruct() const { return _struct; }
 
-    bool hasField(const std::string& fieldName) const {
-        return _fields.contains(fieldName) || (_parent && _parent->hasField(fieldName));
-    }
+    bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
 
-    const EvaType& getFieldType(const std::string& fieldName) const {
+    const EvaType& getField(const std::string& fieldName) const {
         if (_fields.contains(fieldName)) {
             return _fields.at(fieldName);
         }
 
-        if (_parent) {
-            return _parent->getFieldType(fieldName);
-        }
-
-        throw std::runtime_error("Unknown field: " + fieldName);
+        throw std::runtime_error("Unknown field: " + fieldName + " in class: " + _name);
     }
 
     llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
@@ -121,29 +104,22 @@ public:
             return builder.CreateStructGEP(_struct, ptr, fieldIndex, "f_" + fieldName);
         }
 
-        if (_parent) {
-            auto parentAddress =
-                    builder.CreateStructGEP(_struct, ptr, kVTableIndex + 1, "add_pptr_" + _name);
-            auto parentPtr = builder.CreateLoad(_parent->_struct->getPointerTo(), parentAddress,
-                                                "pptr_" + _name);
-            return _parent->getFieldAddress(builder, parentPtr, fieldName);
-        }
-
-        throw std::runtime_error("Unknown field: " + fieldName);
+        throw std::runtime_error("Unknown field: " + fieldName + " in class: " + _name);
     }
 
-    llvm::Value* getParentAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr) const {
-        if (_parent) {
-            return builder.CreateStructGEP(_struct, ptr, kVTableIndex + 1, "add_pptr_" + _name);
-        }
+    auto& getFields() const { return _fields; }
 
-        throw std::runtime_error("No parent class");
-    }
+    bool hasMethod(const std::string& methodName) const { return _methods.contains(methodName); }
+
+    EvaMethod& getMethod(const std::string& methodName) { return _methods.at(methodName); }
+
+    auto& getMethods() const { return _methods; }
 
 protected:
     explicit EvaClassDef() = default;
 
-    explicit EvaClassDef(std::string name) : _name{std::move(name)} {}
+    explicit EvaClassDef(std::string name, std::shared_ptr<EvaClassDef> parent) :
+        _name{std::move(name)}, _parent{parent} {}
 
     virtual ~EvaClassDef() = default;
 
@@ -165,7 +141,7 @@ protected:
     llvm::StructType* _vTable = nullptr;
 
     std::unordered_map<std::string, EvaType> _fields;
-    std::unordered_map<std::string, EvaConstant> _methods;
+    std::unordered_map<std::string, EvaMethod> _methods;
 };
 
 class ImmutableEvaClassDef final : public EvaClassDef {
@@ -177,23 +153,28 @@ class MutableEvaClassDef final : public EvaClassDef {
 public:
     MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context,
                        const std::shared_ptr<ImmutableEvaClassDef>& parent = nullptr) :
-        EvaClassDef{name} {
-        _parent = parent;
+        EvaClassDef{name, parent} {
         _struct = llvm::StructType::create(context, name);
         _vTable = llvm::StructType::create(context, "vtable_" + name);
+
+        if (_parent) {
+            _fields.insert(_parent->getFields().begin(), _parent->getFields().end());
+            _methods.insert(_parent->getMethods().begin(), _parent->getMethods().end());
+        }
     }
 
-    void insertFieldType(const std::string& fieldName, llvm::Type* field) {
+    void insertField(const std::string& fieldName, llvm::Type* field) {
         if (hasField(fieldName)) {
             throw std::runtime_error("Field already exists: " + fieldName);
         }
-        auto fieldStartIndex = _parent ? kVTableIndex + 2 : kVTableIndex + 1;
+
+        constexpr auto fieldStartIndex = kVTableIndex + 1;
         _fields[fieldName] = EvaType{field, _fields.size() + fieldStartIndex};
     }
 
-    void setMethod(const std::string& methodName, llvm::Function* method) {
-        int idx = _methods.size();
-        _methods[methodName] = EvaConstant{method, idx};
+    void insertMethod(const std::string& methodName, llvm::Function* method) {
+        const size_t idx = hasMethod(methodName) ? getMethod(methodName).index() : _methods.size();
+        _methods[methodName] = EvaMethod{method, idx};
     }
 
     std::shared_ptr<ImmutableEvaClassDef> toImmutable(llvm::Module& module) {
@@ -203,27 +184,23 @@ public:
         }
         _vTable->setBody(vTableFields);
 
-        std::vector<llvm::Type*> structFields{_vTable->getPointerTo()};
-        if (_parent) {
-            structFields.push_back(_parent->getStruct()->getPointerTo());
-        }
-
-        for (auto& [_, type]: _fields) {
-            structFields.push_back(*type);
-        }
-        _struct->setBody(structFields);
-
         module.getOrInsertGlobal("i_" + _vTable->getName().str(), _vTable);
-        auto variable = module.getGlobalVariable("i_" + _vTable->getName().str());
+        const auto variable = module.getGlobalVariable("i_" + _vTable->getName().str());
 
         std::vector<llvm::Constant*> vTableValues;
         for (auto& [_, method]: _methods) {
             vTableValues.push_back(*method);
         }
 
-        auto init = llvm::ConstantStruct::get(_vTable, vTableValues);
+        const auto init = llvm::ConstantStruct::get(_vTable, vTableValues);
         variable->setInitializer(init);
         variable->setAlignment(llvm::MaybeAlign(4));
+
+        std::vector<llvm::Type*> structFields{_vTable->getPointerTo()};
+        for (auto& [_, type]: _fields) {
+            structFields.push_back(*type);
+        }
+        _struct->setBody(structFields);
 
         return std::make_shared<ImmutableEvaClassDef>(std::move(*this));
     }
