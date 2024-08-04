@@ -179,26 +179,30 @@ public:
 
     std::shared_ptr<ImmutableEvaClassDef> toImmutable(llvm::Module& module) {
         std::vector<llvm::Type*> vTableFields{};
+        vTableFields.resize(_methods.size());
         for (auto& [_, method]: _methods) {
-            vTableFields.push_back((*method)->getType());
+            vTableFields[method.index()] = (*method)->getType();
         }
         _vTable->setBody(vTableFields);
 
+        std::vector<llvm::Constant*> vTableValues;
+        vTableValues.resize(_methods.size());
+        for (auto& [_, method]: _methods) {
+            vTableValues[method.index()] = *method;
+        }
+
         module.getOrInsertGlobal("i_" + _vTable->getName().str(), _vTable);
         const auto variable = module.getGlobalVariable("i_" + _vTable->getName().str());
-
-        std::vector<llvm::Constant*> vTableValues;
-        for (auto& [_, method]: _methods) {
-            vTableValues.push_back(*method);
-        }
 
         const auto init = llvm::ConstantStruct::get(_vTable, vTableValues);
         variable->setInitializer(init);
         variable->setAlignment(llvm::MaybeAlign(4));
 
-        std::vector<llvm::Type*> structFields{_vTable->getPointerTo()};
+        std::vector<llvm::Type*> structFields{};
+        structFields.resize(_fields.size() + 1);
+        structFields[kVTableIndex] = _vTable->getPointerTo();
         for (auto& [_, type]: _fields) {
-            structFields.push_back(*type);
+            structFields[type.index()] = *type;
         }
         _struct->setBody(structFields);
 
