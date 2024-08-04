@@ -4,39 +4,6 @@
 #include <llvm/IR/Type.h>
 #include <unordered_map>
 
-template<typename VType>
-struct AbstractEvaValue {
-    explicit AbstractEvaValue(VType value, std::any metadata) :
-        value{value}, metadata{std::move(metadata)} {}
-
-    virtual ~AbstractEvaValue() = default;
-
-    [[nodiscard]] virtual bool isNull() const = 0;
-
-    virtual VType operator*() const { return value; }
-
-    VType value;
-    std::any metadata;
-};
-
-struct EvaValue final : AbstractEvaValue<llvm::Value*> {
-    explicit EvaValue() : AbstractEvaValue{nullptr, {}} {}
-    EvaValue(llvm::Value* value, std::any metadata = {}) :
-        AbstractEvaValue{value, std::move(metadata)} {}
-
-    [[nodiscard]] bool isNull() const override { return value == nullptr; }
-};
-
-inline EvaValue EvaValueNull{nullptr};
-
-struct EvaConstant final : AbstractEvaValue<llvm::Constant*> {
-    explicit EvaConstant() : AbstractEvaValue{nullptr, {}} {}
-    EvaConstant(llvm::Constant* value, std::any metadata) :
-        AbstractEvaValue{value, std::move(metadata)} {}
-
-    [[nodiscard]] bool isNull() const override { return value == nullptr; }
-};
-
 struct EvaType {
     explicit EvaType() : _type{nullptr} {}
 
@@ -68,6 +35,54 @@ private:
     std::optional<std::string> _actualType = std::nullopt;
     std::optional<size_t> _index = std::nullopt;
 };
+
+template<typename VType>
+struct AbstractEvaValue {
+    explicit AbstractEvaValue(VType value, std::any metadata) :
+        value{value}, metadata{std::move(metadata)} {}
+
+    virtual ~AbstractEvaValue() = default;
+
+    [[nodiscard]] virtual bool isNull() const = 0;
+
+    virtual VType operator*() const { return value; }
+
+    VType value;
+    std::any metadata;
+};
+
+struct EvaValue {
+    explicit EvaValue() : _value{nullptr} {}
+
+    explicit EvaValue(llvm::Value* value, std::optional<EvaType> type = std::nullopt) :
+        _value{value}, _type{std::move(type)} {}
+
+    [[nodiscard]] llvm::Value* operator*() const { return _value; }
+
+    [[nodiscard]] bool isNull() const { return _value == nullptr; }
+
+    [[nodiscard]] const EvaType& type() const {
+        if (!_type) {
+            throw std::runtime_error("Type not set");
+        }
+        return *_type;
+    }
+
+private:
+    llvm::Value* _value;
+    std::optional<EvaType> _type = std::nullopt;
+};
+
+static inline EvaValue EvaValueNull{};
+
+struct EvaConstant final : AbstractEvaValue<llvm::Constant*> {
+    explicit EvaConstant() : AbstractEvaValue{nullptr, {}} {}
+    EvaConstant(llvm::Constant* value, std::any metadata) :
+        AbstractEvaValue{value, std::move(metadata)} {}
+
+    [[nodiscard]] bool isNull() const override { return value == nullptr; }
+};
+
 
 class EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
 public:
