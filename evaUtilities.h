@@ -3,7 +3,6 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Type.h>
 #include <unordered_map>
-#include <utility>
 
 template<typename VType>
 struct AbstractEvaValue {
@@ -39,20 +38,35 @@ struct EvaConstant final : AbstractEvaValue<llvm::Constant*> {
 };
 
 struct EvaType {
-    explicit EvaType() : type{nullptr} {}
-    explicit EvaType(llvm::Type* type, std::any metadata = {}) :
-        type{type}, metadata{std::move(metadata)} {}
+    explicit EvaType() : _type{nullptr} {}
 
-    llvm::Type* operator*() const { return type; }
+    explicit EvaType(llvm::Type* type, std::string actualType) :
+        _type{type}, _actualType{std::move(actualType)} {}
 
-    [[nodiscard]] int metadataAsInt() const { return std::any_cast<int>(metadata); }
+    explicit EvaType(llvm::Type* type, size_t index) : _type{type}, _index{index} {}
 
-    [[nodiscard]] std::string metadataAsString() const {
-        return std::any_cast<std::string>(metadata);
+    [[nodiscard]] bool isInvalid() const { return _type == nullptr; }
+
+    llvm::Type* operator*() const { return _type; }
+
+    [[nodiscard]] size_t index() const {
+        if (!_index) {
+            throw std::runtime_error("Index not set");
+        }
+        return *_index;
     }
 
-    llvm::Type* type;
-    std::any metadata;
+    [[nodiscard]] const std::string& actualType() const {
+        if (!_actualType) {
+            throw std::runtime_error("Actual type not set");
+        }
+        return *_actualType;
+    }
+
+private:
+    llvm::Type* _type;
+    std::optional<std::string> _actualType = std::nullopt;
+    std::optional<size_t> _index = std::nullopt;
 };
 
 class EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
@@ -88,7 +102,7 @@ public:
     llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                  const std::string& fieldName) const {
         if (_fields.contains(fieldName)) {
-            const auto fieldIndex = _fields.at(fieldName).metadataAsInt();
+            const auto fieldIndex = _fields.at(fieldName).index();
             return builder.CreateStructGEP(_struct, ptr, fieldIndex, "f_" + fieldName);
         }
 
@@ -159,7 +173,7 @@ public:
             throw std::runtime_error("Field already exists: " + fieldName);
         }
         auto fieldStartIndex = _parent ? kVTableIndex + 2 : kVTableIndex + 1;
-        _fields[fieldName] = EvaType{field, static_cast<int>(_fields.size() + fieldStartIndex)};
+        _fields[fieldName] = EvaType{field, _fields.size() + fieldStartIndex};
     }
 
     void setMethod(const std::string& methodName, llvm::Function* method) {

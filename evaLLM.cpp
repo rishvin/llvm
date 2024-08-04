@@ -346,7 +346,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
             arg->setName(params.names[i]);
 
             // Insert the function arguments into the environment.
-            fnEnv->insert(params.names[i], {arg, params.types[i].metadata});
+            fnEnv->insert(params.names[i], {arg, params.types[i].actualType()});
         }
 
         auto retValue = _generate(body, fnEnv);
@@ -695,7 +695,7 @@ llvm::Value* EvaLLVM::_allocateStackVariable(llvm::Function* fn, const std::stri
     const auto currentBuilder = std::make_unique<llvm::IRBuilder<>>(*_context);
     currentBuilder->SetInsertPoint(&fn->getEntryBlock(), fn->getEntryBlock().begin());
     const auto allocVar = currentBuilder->CreateAlloca(*type, nullptr, name);
-    env->insert(name, {allocVar, type.metadata});
+    env->insert(name, {allocVar, type.actualType()});
     return allocVar;
 }
 
@@ -709,7 +709,7 @@ llvm::Value* EvaLLVM::_allocateHeapVariable(const std::string& name, EvaType typ
 
     auto gcMallocFn = _module->getFunction("GC_malloc");
     auto allocVar = _builder->CreateCall(gcMallocFn, allocSize);
-    env->insert(name, {allocVar, type.metadata});
+    env->insert(name, {allocVar, type.actualType()});
     return allocVar;
 }
 
