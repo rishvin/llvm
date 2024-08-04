@@ -43,8 +43,10 @@ private:
 
     llvm::BasicBlock* _createBB(const std::string& name, llvm::Function* fn = nullptr) const;
 
-    llvm::Value* allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
-                                  Env env) const;
+    llvm::Value* _allocateStackVariable(llvm::Function* fn, const std::string& name, EvaType type,
+                                        Env env) const;
+
+    llvm::Value* _allocateHeapVariable(const std::string& name, EvaType type, Env env) const;
 
     llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName,
                                   Env env) const;
@@ -52,6 +54,8 @@ private:
     ImmutableEvaClassDef* _resolveClass(const std::string& className, Env env) const;
 
     EvaValue _handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr, Env env) const;
+
+    EvaValue _allocateAndInitClass(const std::string& clsName, EvaExpr& initArgs, Env env) const;
 
 
     void _setupExternalFunctions() const;

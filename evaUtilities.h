@@ -3,7 +3,6 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Type.h>
 #include <unordered_map>
-#include <utility>
 
 template<typename VType>
 struct AbstractEvaValue {
@@ -57,38 +56,72 @@ struct EvaType {
 
 class ImmutableEvaClassDef : std::enable_shared_from_this<ImmutableEvaClassDef> {
 public:
-    ImmutableEvaClassDef() = default;
+    static constexpr auto kVTableIndex = 0;
 
-    ImmutableEvaClassDef(std::string& name, llvm::StructType* structType,
-                         llvm::StructType* vTableType,
+    explicit ImmutableEvaClassDef(const std::shared_ptr<ImmutableEvaClassDef>& parent = nullptr) :
+        _parent{parent} {}
+
+    ImmutableEvaClassDef(const std::shared_ptr<ImmutableEvaClassDef>& parent, std::string& name,
+                         llvm::StructType* structType, llvm::StructType* vTableType,
                          std::unordered_map<std::string, EvaType> fields,
                          std::unordered_map<std::string, EvaConstant> methods) :
-        _name{std::move(name)}, _struct{structType}, _vTable{vTableType},
+        _parent{parent}, _name{std::move(name)}, _struct{structType}, _vTable{vTableType},
         _fields{std::move(fields)}, _methods{std::move(methods)} {}
 
     [[nodiscard]] std::string getName() const { return _name; }
 
     llvm::StructType* getStruct() const { return _struct; }
 
-    const EvaType& getField(const std::string& fieldName) const { return _fields.at(fieldName); }
+    const EvaType& getFieldType(const std::string& fieldName) const {
+        if (_fields.contains(fieldName)) {
+            return _fields.at(fieldName);
+        }
 
-    bool hasField(const std::string& fieldName) const { return _fields.contains(fieldName); }
+        if (_parent) {
+            return _parent->getFieldType(fieldName);
+        }
+
+        throw std::runtime_error("Unknown field: " + fieldName);
+    }
+
+    bool hasField(const std::string& fieldName) const {
+        return _fields.contains(fieldName) || (_parent && _parent->hasField(fieldName));
+    }
 
     llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                  const std::string& fieldName) const {
-        if (!hasField(fieldName)) {
-            throw std::runtime_error("Unknown field: " + fieldName + " in class: " + _name);
+        if (_fields.contains(fieldName)) {
+            auto& field = _fields.at(fieldName);
+            const auto fieldIndex = field.metadataAsInt();
+            return builder.CreateStructGEP(_struct, ptr, fieldIndex, "f_" + fieldName);
         }
 
-        auto& field = getField(fieldName);
-        return builder.CreateStructGEP(_struct, ptr, field.metadataAsInt(), "f_" + fieldName);
+        if (_parent) {
+            auto parentIndex = kVTableIndex + 1;
+            auto parentPtr =
+                    builder.CreateStructGEP(_struct, ptr, parentIndex, "parent_ptr" + _name);
+            auto loadedParent = builder.CreateLoad(_parent->_struct->getPointerTo(), parentPtr,
+                                                   "parent_ptr" + _name);
+            return _parent->getFieldAddress(builder, loadedParent, fieldName);
+        }
+
+        throw std::runtime_error("Unknown field: " + fieldName);
     }
 
-    auto& getFields() const { return _fields; }
+    llvm::Value* getParentAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr) const {
+        if (_parent) {
+            auto parentIndex = kVTableIndex + 1;
+            return builder.CreateStructGEP(_struct, ptr, parentIndex, "parent_ptr" + _name);
+        }
 
-    auto& getMethods() const { return _methods; }
+        throw std::runtime_error("No parent class");
+    }
+
+    std::shared_ptr<ImmutableEvaClassDef> getParent() const { return _parent; }
 
 protected:
+    std::shared_ptr<ImmutableEvaClassDef> _parent = nullptr;
+
     std::string _name;
 
     llvm::StructType* _struct = nullptr;
@@ -101,22 +134,19 @@ protected:
 class MutableEvaClassDef : public ImmutableEvaClassDef {
 public:
     MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context,
-                       std::shared_ptr<ImmutableEvaClassDef> parent = nullptr) :
-        ImmutableEvaClassDef{} {
+                       const std::shared_ptr<ImmutableEvaClassDef>& parent = nullptr) :
+        ImmutableEvaClassDef{parent} {
         _name = name;
         _struct = llvm::StructType::create(context, name);
         _vTable = llvm::StructType::create(context, "vtable_" + name);
-
-        if (parent) {
-            _fields.insert(parent->getFields().begin(), parent->getFields().end());
-            _methods.insert(parent->getMethods().begin(), parent->getMethods().end());
-        }
     }
 
-    void setField(const std::string& fieldName, llvm::Type* field) {
-        constexpr int fieldStartIdx = 1;
-        int idx = _fields.size() + fieldStartIdx;
-        _fields[fieldName] = EvaType{field, idx};
+    void insertFieldType(const std::string& fieldName, llvm::Type* field) {
+        if (hasField(fieldName)) {
+            throw std::runtime_error("Field already exists: " + fieldName);
+        }
+        auto fieldStartIndex = _parent ? kVTableIndex + 2 : kVTableIndex + 1;
+        _fields[fieldName] = EvaType{field, static_cast<int>(_fields.size() + fieldStartIndex)};
     }
 
     void setMethod(const std::string& methodName, llvm::Function* method) {
@@ -131,7 +161,11 @@ public:
         }
         _vTable->setBody(vTableFields);
 
-        std::vector<llvm::Type*> structFields{_vTable};
+        std::vector<llvm::Type*> structFields{_vTable->getPointerTo()};
+        if (_parent) {
+            structFields.push_back(_parent->getStruct()->getPointerTo());
+        }
+
         for (auto& [_, type]: _fields) {
             structFields.push_back(*type);
         }
@@ -149,6 +183,7 @@ public:
         variable->setInitializer(init);
         variable->setAlignment(llvm::MaybeAlign(4));
 
-        return std::make_shared<ImmutableEvaClassDef>(_name, _struct, _vTable, _fields, _methods);
+        return std::make_shared<ImmutableEvaClassDef>(_parent, _name, _struct, _vTable, _fields,
+                                                      _methods);
     }
 };

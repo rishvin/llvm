@@ -111,6 +111,7 @@
                     (var z 0)
                     (def __init__ (self z)
                         (
+                            (super self __init__ 10 20)
                             (set (prop self z) z)
                         )
                     )
@@ -124,13 +125,20 @@
            )
 
            // Derived class operations.
-           (var (dp DerivedPoint) (new DerivedPoint (100, 200)))
-           (set (prop dp x) 60)
-           (handle dp)
-           (method dp str)
-           (method dp setX 700)
+           (var (dp DerivedPoint) (new DerivedPoint (500)))
+           //(handle dp)
+           //(method dp str)
+           //(method dp setX 700)
            (print "Derived Point x = %d\n" (prop dp x))
            (print "Derived Point y = %d\n" (prop dp y))
            (print "Derived Point z = %d\n" (prop dp z))
+           (set (prop dp x) 60)
+           (print "Derived Point x = %d\n" (prop dp x))
+           (print "Derived Point y = %d\n" (prop dp y))
+           (print "Derived Point z = %d\n" (prop dp z))
+
+           // Print again old class.
+            (print "Point x = %d\n" (prop p x))
+            (print "Point y = %d\n" (prop p y))
 )
 

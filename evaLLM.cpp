@@ -179,7 +179,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         const auto& subExpr = expr->expList.at(2);
         const auto& init = _generate(subExpr, env);
 
-        auto varBinding = allocateVariable(env->getFunctionScope(), name, type, env);
+        auto varBinding = _allocateStackVariable(env->getFunctionScope(), name, type, env);
         _builder->CreateStore(*init, varBinding);
 
         return init;
@@ -380,27 +380,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
     // (var point (new Point (10 20)))
     if (op == "new") {
         auto clsName = expr->expList.at(1)->expString;
-        auto clsDef = _resolveClass(clsName, env);
-        if (!clsDef) {
-            throw std::runtime_error("Unknown class: " + clsName);
-        }
-
-        auto instanceName = "i" + clsName;
-        auto instance = _builder->CreateAlloca(clsDef->getStruct(), nullptr, instanceName);
-
-        auto constructorName = clsDef->getName() + "_" + "__init__";
-        const auto& constructor = _module->getFunction(constructorName);
-        if (!constructor) {
-            throw std::runtime_error("Cannot find constructor for class : " + clsName);
-        }
-
-        std::vector<llvm::Value*> args{instance};
-        for (auto& subExpr: expr->expList.at(2)->expList) {
-            args.push_back(*_generate(subExpr, env));
-        }
-
-        _builder->CreateCall(constructor, args);
-        return instance;
+        return _allocateAndInitClass(clsName, *expr->expList.at(2), env);
     }
 
     // prop point x
@@ -414,7 +394,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto clsStrName = std::any_cast<std::string>(instance.metadata);
         auto clsDef = _resolveClass(clsStrName, env);
 
-        auto& field = clsDef->getField(fieldName);
+        auto& field = clsDef->getFieldType(fieldName);
 
         // Use GetElementPtr to get the field.
         return {_builder->CreateLoad(*field, address, "v" + fieldName)};
@@ -477,9 +457,75 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         return _handleOps(std::make_unique<EvaExpr>(std::move(fnCallExprList)), env);
     }
 
+    // (method self str)
+    // (method self setX 50)
+    if (op == "super") {
+        auto clsDef = env->getClassScope();
+
+        if (clsDef == nullptr) {
+            throw std::runtime_error("super is not allowed here");
+        }
+
+        auto parentCls = clsDef->getParent();
+        if (parentCls == nullptr) {
+            throw std::runtime_error("Super class not found");
+        }
+
+        auto instance = env->get(expr->expList.at(1)->expString);
+        if (instance.isNull()) {
+            throw std::runtime_error("Unknown class instance: " + expr->expList.at(1)->expString);
+        }
+
+        std::vector<std::unique_ptr<EvaExpr>> initArgs{};
+        for (auto i = 3; i < expr->expList.size(); i++) {
+            initArgs.push_back(std::move(expr->expList.at(i)));
+        }
+
+        EvaExpr initArgsExpr{std::move(initArgs)};
+
+        auto parentInstance = _allocateAndInitClass(parentCls->getName(), initArgsExpr, env);
+        auto parentPtr = clsDef->getParentAddress(*_builder, *instance);
+        _builder->CreateStore(*parentInstance, parentPtr);
+
+        return instance;
+    }
+
+
     // Function calls.
     // (add 10 20)
     return _handleFunctionCall(op, *expr, env);
+}
+
+EvaValue EvaLLVM::_allocateAndInitClass(const std::string& clsName, EvaExpr& initArgs,
+                                        Env env) const {
+    auto clsDef = _resolveClass(clsName, env);
+    if (!clsDef) {
+        throw std::runtime_error("Unknown class: " + clsName);
+    }
+
+    auto instanceName = "i_" + clsName;
+    // auto instance = _builder->CreateAlloca(clsDef->getStruct(), nullptr, instanceName);
+
+    // allocate with gc malloc.
+    auto type = _extractType(EvaExpr{clsName}, env);
+    auto instance = _allocateHeapVariable(instanceName, type, env);
+
+    EvaEnvironment newEnv{env};
+    newEnv.setClassInstanceScope({instance, clsName});
+
+    auto constructorName = clsDef->getName() + "_" + "__init__";
+    const auto& constructor = _module->getFunction(constructorName);
+    if (!constructor) {
+        throw std::runtime_error("Cannot find constructor for class : " + clsName);
+    }
+
+    std::vector<llvm::Value*> args{instance};
+    for (auto& subExpr: initArgs.expList) {
+        args.push_back(*_generate(subExpr, env));
+    }
+
+    _builder->CreateCall(constructor, args);
+    return instance;
 }
 
 EvaValue EvaLLVM::_handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr,
@@ -525,7 +571,7 @@ std::shared_ptr<MutableEvaClassDef> EvaLLVM::_buildClassDef(const std::unique_pt
         if (subExpr->expList.at(0)->expString == "var") {
             auto varName = subExpr->expList.at(1)->expString;
             auto varType = _extractType(*subExpr->expList.at(1), newEnv);
-            classDef->setField(varName, *varType);
+            classDef->insertFieldType(varName, *varType);
         }
     }
 
@@ -647,11 +693,25 @@ llvm::BasicBlock* EvaLLVM::_createBB(const std::string& name, llvm::Function* fn
     return llvm::BasicBlock::Create(*_context, name, fn);
 }
 
-llvm::Value* EvaLLVM::allocateVariable(llvm::Function* fn, const std::string& name, EvaType type,
-                                       const Env env) const {
+llvm::Value* EvaLLVM::_allocateStackVariable(llvm::Function* fn, const std::string& name,
+                                             EvaType type, const Env env) const {
     const auto currentBuilder = std::make_unique<llvm::IRBuilder<>>(*_context);
     currentBuilder->SetInsertPoint(&fn->getEntryBlock(), fn->getEntryBlock().begin());
     const auto allocVar = currentBuilder->CreateAlloca(*type, nullptr, name);
+    env->insert(name, {allocVar, type.metadata});
+    return allocVar;
+}
+
+llvm::Value* EvaLLVM::_allocateHeapVariable(const std::string& name, EvaType type,
+                                            const Env env) const {
+    llvm::DataLayout dataLayout{_module.get()};
+    auto structSize = dataLayout.getTypeAllocSize(*type);
+
+    // Create a constant for the size
+    llvm::Value* allocSize = llvm::ConstantInt::get(_builder->getInt64Ty(), structSize);
+
+    auto gcMallocFn = _module->getFunction("GC_malloc");
+    auto allocVar = _builder->CreateCall(gcMallocFn, allocSize);
     env->insert(name, {allocVar, type.metadata});
     return allocVar;
 }
