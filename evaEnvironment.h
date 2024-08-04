@@ -29,15 +29,6 @@ public:
         return _parent != nullptr ? _parent->getClassScope() : nullptr;
     }
 
-    void setClassInstanceScope(EvaValue clsInstance) { _clsInstance = clsInstance; }
-
-    EvaValue getClassInstanceScope() const {
-        if (!_clsInstance.isNull()) {
-            return _clsInstance;
-        }
-        return _parent != nullptr ? _parent->getClassInstanceScope() : EvaValueNull;
-    }
-
     void setFunctionScope(llvm::Function *function) { fn = function; }
 
     llvm::Function *getFunctionScope() const {
@@ -59,6 +50,5 @@ private:
     std::unordered_map<std::string, EvaValue> _symbols;
     std::shared_ptr<EvaEnvironment> _parent = nullptr;
     MutableEvaClassDef *_scopedClass = nullptr;
-    EvaValue _clsInstance = EvaValueNull;
     llvm::Function *fn = nullptr;
 };

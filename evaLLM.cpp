@@ -504,14 +504,11 @@ EvaValue EvaLLVM::_allocateAndInitClass(const std::string& clsName, EvaExpr& ini
     }
 
     auto instanceName = "i_" + clsName;
-    // auto instance = _builder->CreateAlloca(clsDef->getStruct(), nullptr, instanceName);
 
-    // allocate with gc malloc.
     auto type = _extractType(EvaExpr{clsName}, env);
     auto instance = _allocateHeapVariable(instanceName, type, env);
 
     EvaEnvironment newEnv{env};
-    newEnv.setClassInstanceScope({instance, clsName});
 
     auto constructorName = clsDef->getName() + "_" + "__init__";
     const auto& constructor = _module->getFunction(constructorName);
@@ -646,7 +643,7 @@ llvm::Value* EvaLLVM::_getFieldAddress(const EvaValue& clsInstance, std::string&
     return cls->getFieldAddress(*_builder, *clsInstance, fieldName);
 }
 
-ImmutableEvaClassDef* EvaLLVM::_resolveClass(const std::string& clsName, Env env) const {
+EvaClassDef* EvaLLVM::_resolveClass(const std::string& clsName, Env env) const {
     if (_classNameToDefMap.contains(clsName)) {
         return _classNameToDefMap.at(clsName).get();
     }

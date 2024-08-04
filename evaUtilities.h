@@ -3,6 +3,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Type.h>
 #include <unordered_map>
+#include <utility>
 
 template<typename VType>
 struct AbstractEvaValue {
@@ -54,23 +55,23 @@ struct EvaType {
     std::any metadata;
 };
 
-class ImmutableEvaClassDef : std::enable_shared_from_this<ImmutableEvaClassDef> {
+class EvaClassDef : std::enable_shared_from_this<EvaClassDef> {
 public:
     static constexpr auto kVTableIndex = 0;
 
-    explicit ImmutableEvaClassDef(const std::shared_ptr<ImmutableEvaClassDef>& parent = nullptr) :
-        _parent{parent} {}
+    EvaClassDef(const EvaClassDef&) = delete;
 
-    ImmutableEvaClassDef(const std::shared_ptr<ImmutableEvaClassDef>& parent, std::string& name,
-                         llvm::StructType* structType, llvm::StructType* vTableType,
-                         std::unordered_map<std::string, EvaType> fields,
-                         std::unordered_map<std::string, EvaConstant> methods) :
-        _parent{parent}, _name{std::move(name)}, _struct{structType}, _vTable{vTableType},
-        _fields{std::move(fields)}, _methods{std::move(methods)} {}
+    EvaClassDef& operator=(const EvaClassDef&) = delete;
 
     [[nodiscard]] std::string getName() const { return _name; }
 
+    std::shared_ptr<const EvaClassDef> getParent() const { return _parent; }
+
     llvm::StructType* getStruct() const { return _struct; }
+
+    bool hasField(const std::string& fieldName) const {
+        return _fields.contains(fieldName) || (_parent && _parent->hasField(fieldName));
+    }
 
     const EvaType& getFieldType(const std::string& fieldName) const {
         if (_fields.contains(fieldName)) {
@@ -84,25 +85,19 @@ public:
         throw std::runtime_error("Unknown field: " + fieldName);
     }
 
-    bool hasField(const std::string& fieldName) const {
-        return _fields.contains(fieldName) || (_parent && _parent->hasField(fieldName));
-    }
-
     llvm::Value* getFieldAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                  const std::string& fieldName) const {
         if (_fields.contains(fieldName)) {
-            auto& field = _fields.at(fieldName);
-            const auto fieldIndex = field.metadataAsInt();
+            const auto fieldIndex = _fields.at(fieldName).metadataAsInt();
             return builder.CreateStructGEP(_struct, ptr, fieldIndex, "f_" + fieldName);
         }
 
         if (_parent) {
-            auto parentIndex = kVTableIndex + 1;
-            auto parentPtr =
-                    builder.CreateStructGEP(_struct, ptr, parentIndex, "parent_ptr" + _name);
-            auto loadedParent = builder.CreateLoad(_parent->_struct->getPointerTo(), parentPtr,
-                                                   "parent_ptr" + _name);
-            return _parent->getFieldAddress(builder, loadedParent, fieldName);
+            auto parentAddress =
+                    builder.CreateStructGEP(_struct, ptr, kVTableIndex + 1, "add_pptr_" + _name);
+            auto parentPtr = builder.CreateLoad(_parent->_struct->getPointerTo(), parentAddress,
+                                                "pptr_" + _name);
+            return _parent->getFieldAddress(builder, parentPtr, fieldName);
         }
 
         throw std::runtime_error("Unknown field: " + fieldName);
@@ -110,19 +105,32 @@ public:
 
     llvm::Value* getParentAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr) const {
         if (_parent) {
-            auto parentIndex = kVTableIndex + 1;
-            return builder.CreateStructGEP(_struct, ptr, parentIndex, "parent_ptr" + _name);
+            return builder.CreateStructGEP(_struct, ptr, kVTableIndex + 1, "add_pptr_" + _name);
         }
 
         throw std::runtime_error("No parent class");
     }
 
-    std::shared_ptr<ImmutableEvaClassDef> getParent() const { return _parent; }
-
 protected:
-    std::shared_ptr<ImmutableEvaClassDef> _parent = nullptr;
+    explicit EvaClassDef() = default;
 
-    std::string _name;
+    explicit EvaClassDef(std::string name) : _name{std::move(name)} {}
+
+    virtual ~EvaClassDef() = default;
+
+    EvaClassDef(EvaClassDef&& other) : _name{other._name} {
+        _parent = other._parent;
+
+        _struct = other._struct;
+        _vTable = other._vTable;
+
+        _fields = std::move(other._fields);
+        _methods = std::move(other._methods);
+    }
+
+    const std::string _name;
+
+    std::shared_ptr<EvaClassDef> _parent = nullptr;
 
     llvm::StructType* _struct = nullptr;
     llvm::StructType* _vTable = nullptr;
@@ -131,12 +139,17 @@ protected:
     std::unordered_map<std::string, EvaConstant> _methods;
 };
 
-class MutableEvaClassDef : public ImmutableEvaClassDef {
+class ImmutableEvaClassDef final : public EvaClassDef {
+public:
+    explicit ImmutableEvaClassDef(EvaClassDef&& other) : EvaClassDef{std::move(other)} {}
+};
+
+class MutableEvaClassDef final : public EvaClassDef {
 public:
     MutableEvaClassDef(const std::string& name, llvm::LLVMContext& context,
                        const std::shared_ptr<ImmutableEvaClassDef>& parent = nullptr) :
-        ImmutableEvaClassDef{parent} {
-        _name = name;
+        EvaClassDef{name} {
+        _parent = parent;
         _struct = llvm::StructType::create(context, name);
         _vTable = llvm::StructType::create(context, "vtable_" + name);
     }
@@ -183,7 +196,6 @@ public:
         variable->setInitializer(init);
         variable->setAlignment(llvm::MaybeAlign(4));
 
-        return std::make_shared<ImmutableEvaClassDef>(_parent, _name, _struct, _vTable, _fields,
-                                                      _methods);
+        return std::make_shared<ImmutableEvaClassDef>(std::move(*this));
     }
 };

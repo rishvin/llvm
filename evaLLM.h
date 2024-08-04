@@ -51,7 +51,7 @@ private:
     llvm::Value* _getFieldAddress(const EvaValue& clsInstance, std::string& fieldName,
                                   Env env) const;
 
-    ImmutableEvaClassDef* _resolveClass(const std::string& className, Env env) const;
+    EvaClassDef* _resolveClass(const std::string& className, Env env) const;
 
     EvaValue _handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr, Env env) const;
 
