@@ -335,7 +335,7 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
                 _createFunction(fnName, llvm::FunctionType::get(*returnType, fnTypes, false), env);
 
         if (env->getClassScope() != nullptr) {
-            env->getClassScope()->insertMethod(fnName, currentFn);
+            env->getClassScope()->insertMethod(expr->expList.at(1)->expString, currentFn);
         }
 
         auto fnEnv = std::make_shared<EvaEnvironment>(env);
@@ -448,23 +448,32 @@ EvaValue EvaLLVM::_handleOps(const std::unique_ptr<EvaExpr>& expr, Env env) cons
         auto& clsInstanceName = expr->expList.at(1)->expString;
         auto& methodName = expr->expList.at(2)->expString;
 
-        auto clsInstance = env->get(clsInstanceName);
+        auto clsInstance = _generate(expr->expList.at(1), env);
         if (clsInstance.isNull()) {
             throw std::runtime_error("Unknown class instance: " + clsInstanceName);
         }
 
         auto clsName = clsInstance.type().actualType();
-        auto resolvedMethodName = clsName + "_" + methodName;
 
-        std::vector<std::unique_ptr<EvaExpr>> fnCallExprList{};
-        fnCallExprList.push_back(std::make_unique<EvaExpr>(resolvedMethodName));
-        fnCallExprList.push_back(std::make_unique<EvaExpr>(clsInstanceName));
-
-        for (auto i = 3; i < expr->expList.size(); i++) {
-            fnCallExprList.push_back(std::move(expr->expList.at(i)));
+        auto clsDef = _resolveClass(clsName, env);
+        if (!clsDef) {
+            throw std::runtime_error("Unknown class: " + clsName);
         }
 
-        return _handleOps(std::make_unique<EvaExpr>(std::move(fnCallExprList)), env);
+        auto clsStr = clsDef->toString();
+
+        auto fnValue = clsDef->getMethodInvocation(*_builder, *clsInstance, methodName);
+
+        std::vector<llvm::Value*> args{*clsInstance};
+        for (auto i = 3; i < expr->expList.size(); i++) {
+            auto& subExpr = expr->expList.at(i);
+            auto arg = _generate(subExpr, env);
+            args.push_back(*arg);
+        }
+
+        auto* fnType = llvm::dyn_cast<llvm::FunctionType>(*fnValue.type());
+
+        return EvaValue{_builder->CreateCall(fnType, *fnValue, args)};
     }
 
     // (method self str)
@@ -520,6 +529,10 @@ void EvaLLVM::_initClass(const EvaValue& clsInstance, const EvaClassDef& clsDef,
         args.push_back(*_generate(subExpr, env));
     }
     _builder->CreateCall(initFn, args);
+
+    auto vTableInstance = clsDef.getVTableInstance(*_module);
+    auto vTableAddress = clsDef.getVTableAddress(*_builder, *clsInstance);
+    _builder->CreateStore(vTableInstance, vTableAddress);
 }
 
 EvaValue EvaLLVM::_handleFunctionCall(const std::string& fnName, const EvaExpr& argsExpr,

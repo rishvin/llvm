@@ -94,7 +94,10 @@
    )
    (def handle ((p Point))
         (
+            (print "Inside handle\n")
             (set (prop p x) 310)
+            (method p str)
+            (print "End of handle\n")
         )
     )
     (var (p Point) (new Point (10, 20)))
@@ -118,7 +121,7 @@
 
                     (def str (self)
                         (
-                                     (print "Point z = %d\n" (prop self z))
+                                     (print "Derived Point z = %d\n" (prop self z))
                         )
                     )
               )
@@ -145,5 +148,10 @@
            // Print again old class.
             (print "Point x = %d\n" (prop p x))
             (print "Point y = %d\n" (prop p y))
+
+
+          (var (pdp Point) (new DerivedPoint (500)))
+          (print "Derived Point x = %d\n" (prop pdp x))
+          (method pdp str)
 )
 

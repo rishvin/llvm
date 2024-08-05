@@ -7,6 +7,8 @@
 struct EvaType {
     explicit EvaType() : _type{nullptr} {}
 
+    explicit EvaType(llvm::Type* type) : _type{type} {}
+
     explicit EvaType(llvm::Type* type, std::string actualType) :
         _type{type}, _actualType{std::move(actualType)} {}
 
@@ -107,6 +109,21 @@ public:
         throw std::runtime_error("Unknown field: " + fieldName + " in class: " + _name);
     }
 
+    EvaValue getMethodInvocation(llvm::IRBuilder<>& builder, llvm::Value* ptr,
+                                 const std::string& methodName) const {
+        if (!_methods.contains(methodName)) {
+            throw std::runtime_error("Unknown method: " + methodName + " in class: " + _name);
+        }
+
+        const auto method = _methods.at(methodName);
+
+        auto vTablePtr = builder.CreateStructGEP(_struct, ptr, kVTableIndex, "vtable_ptr");
+        auto vTable = builder.CreateLoad(_vTable->getPointerTo(), vTablePtr, "vtable");
+        auto methodPtr = builder.CreateStructGEP(_vTable, vTable, method.index(), "method_ptr");
+        auto fn = builder.CreateLoad((*method)->getType(), methodPtr, "method");
+        return EvaValue{fn, EvaType{(*method)->getFunctionType()}};
+    }
+
     auto& getFields() const { return _fields; }
 
     bool hasMethod(const std::string& methodName) const { return _methods.contains(methodName); }
@@ -114,6 +131,32 @@ public:
     EvaMethod& getMethod(const std::string& methodName) { return _methods.at(methodName); }
 
     auto& getMethods() const { return _methods; }
+
+    llvm::Constant* getVTableInstance(llvm::Module& module) const {
+        return module.getGlobalVariable("i_" + _vTable->getName().str());
+    }
+
+    llvm::Value* getVTableAddress(llvm::IRBuilder<>& builder, llvm::Value* ptr) const {
+        return builder.CreateStructGEP(_struct, ptr, kVTableIndex, "addr_vtable_ptr");
+    }
+
+    std::string toString() const {
+        std::stringstream ss;
+        ss << "Class: " << _name << "\n";
+        ss << "  Fields:\n";
+
+        // commans seperated fields name withing ` `.
+        for (const auto& [name, type]: _fields) {
+            ss << "`" << name << "`, ";
+        }
+
+
+        ss << "  Methods:\n";
+        for (const auto& [name, type]: _methods) {
+            ss << "`" << name << "`, ";
+        }
+        return ss.str();
+    }
 
 protected:
     explicit EvaClassDef() = default;
