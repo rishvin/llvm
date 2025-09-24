@@ -1,0 +1,157 @@
+(begin
+    (var VERSION 1001)
+    (begin
+        (var VERSION "1.0")
+        (print "Version = %s\n" VERSION)
+    )
+
+    (var x 20)
+    (var y (+ x 50))
+    (print "Value of x = %d\n" x)
+    (print "Value of y = %d\n" y)
+
+    (if (>= y 60)
+        (
+            (var xy (+ x y))
+            (if (>= xy 100)
+                (
+                    (print "Value of xy = %d\n" xy)
+                )
+                (
+                    (print "false cond: Value of xy = %d\n" xy)
+                )
+            )
+        )
+        (
+             (print "false cond: Value of y = %d\n" y)
+        )
+    )
+
+    (var times 5)
+    (while (> times 0)
+        (
+            (var nextTimes 5)
+            (while (> nextTimes 0)
+                (
+                    (print "Times = %d, Next Times = %d\n" times, nextTimes)
+                    (set nextTimes (- nextTimes 1))
+
+                    (if (>= y 10)
+                       (
+                           (var xy (+ x y))
+                           (if (>= xy 100)
+                               (
+                                   (print "Value of xy = %d\n" xy)
+                               )
+                               (
+                                   (print "false cond: Value of xy = %d\n" xy)
+                               )
+                           )
+                       )
+                       (
+                            (print "false cond: Value of y = %d\n" y)
+                       )
+                    )
+
+                )
+            )
+            (set times (- times 1))
+        )
+    )
+
+    (print "Version compare = %d\n"(== VERSION 1))
+
+
+    (def sum (a) (+ a 10))
+    (def multiply (a (b number)) -> number (* a b))
+    (var sumResult (sum x))
+    (var multiplyResult (multiply 10 20))
+    (print "Sum result = %d\n" sumResult)
+    (print "Multiply result = %d\n" multiplyResult)
+
+    (class Point ""
+        (
+            (var x 0)
+            (var y 0)
+            (def __init__ (self x y)
+                (
+                    (set (prop self x) x)
+                    (set (prop self y) y)
+                )
+            )
+
+            (def str (self)
+                (
+                             (print "Point x = %d\n" (prop self x))
+                )
+            )
+            (def setX (self, value)
+                (
+                    (set (prop self x) value)
+                )
+            )
+      )
+   )
+   (def handle ((p Point))
+        (
+            (print "Inside handle\n")
+            (set (prop p x) 310)
+            (method p str)
+            (print "End of handle\n")
+        )
+    )
+    (var (p Point) (new Point (10, 20)))
+    (set (prop p x) 40)
+    (handle p)
+    (method p str)
+    (method p setX 600)
+    (print "Point x = %d\n" (prop p x))
+    (print "Point y = %d\n" (prop p y))
+
+
+    (class DerivedPoint Point
+                (
+                    (var z 0)
+                    (def __init__ (self z)
+                        (
+                            (super self __init__ 10 20)
+                            (set (prop self z) z)
+                        )
+                    )
+
+                    (def str (self)
+                        (
+                                     (print "Derived Point z = %d\n" (prop self z))
+                        )
+                    )
+              )
+           )
+
+           // Derived class operations.
+           (var (dp DerivedPoint) (new DerivedPoint (500)))
+           //(method dp str)
+           //(method dp setX 700)
+           (print "Derived Point x = %d\n" (prop dp x))
+           (print "Derived Point y = %d\n" (prop dp y))
+           (print "Derived Point z = %d\n" (prop dp z))
+           (set (prop dp x) 60)
+           (print "Derived Point x = %d\n" (prop dp x))
+           (print "Derived Point y = %d\n" (prop dp y))
+           (print "Derived Point z = %d\n" (prop dp z))
+
+
+           (handle dp)
+           (print "Derived Point x = %d\n" (prop dp x))
+           (print "Derived Point y = %d\n" (prop dp y))
+           (print "Derived Point z = %d\n" (prop dp z))
+
+           // Print again old class.
+            (print "Point x = %d\n" (prop p x))
+            (print "Point y = %d\n" (prop p y))
+
+
+          (var (pdp Point) (new DerivedPoint (500)))
+          (print "Derived Point x = %d\n" (prop pdp x))
+          (method pdp str)
+)
+
